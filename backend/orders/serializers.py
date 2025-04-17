@@ -3,6 +3,7 @@ from .models import Order, OrderItem, Payment
 from products.serializers import ProductSerializer
 from products.models import Product
 from carts.models import Cart
+from shipping.models import ShippingMethod
 
 class OrderItemSerializer(serializers.ModelSerializer):
     product_details = ProductSerializer(source='product', read_only=True)
@@ -27,9 +28,10 @@ class OrderSerializer(serializers.ModelSerializer):
     class Meta:
         model = Order
         fields = ['id', 'customer', 'customer_username', 'created_at', 'updated_at', 
-                 'status', 'total_amount', 'items', 'payment', 'shipping_address', 
-                 'tracking_number', 'notes']
-        read_only_fields = ['customer', 'created_at', 'updated_at']
+                 'status', 'subtotal_amount', 'shipping_amount', 'total_amount', 'items', 'payment', 
+                 'shipping_address', 'tracking_number', 'notes']
+        read_only_fields = ['customer', 'created_at', 'updated_at', 'subtotal_amount', 
+                           'shipping_amount', 'total_amount']
 
 class OrderCreateSerializer(serializers.Serializer):
     shipping_address = serializers.CharField(required=True)
@@ -63,4 +65,3 @@ class OrderStatusUpdateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Order
         fields = ['status', 'tracking_number', 'notes']
-

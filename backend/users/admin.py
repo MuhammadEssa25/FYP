@@ -4,7 +4,8 @@ from .models import CustomUser
 
 class CustomUserAdmin(UserAdmin):
     model = CustomUser
-    list_display = ['username', 'email', 'role', 'is_staff']
+    list_display = ['username', 'email', 'role', 'is_active', 'last_login', 'created_at', 'is_staff']
+    list_filter = ['is_active', 'role', 'created_at', 'last_login']
     fieldsets = UserAdmin.fieldsets + (
         (None, {'fields': ('role', 'address')}),
     )
@@ -13,4 +14,3 @@ class CustomUserAdmin(UserAdmin):
     )
 
 admin.site.register(CustomUser, CustomUserAdmin)
-

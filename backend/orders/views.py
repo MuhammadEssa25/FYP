@@ -10,9 +10,12 @@ from .serializers import (
 )
 from carts.models import Cart
 from products.models import Product
+from shipping.models import ShippingMethod
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiExample
 from drf_spectacular.types import OpenApiTypes
 from permissions import IsAdmin, IsSellerOrAdmin, IsOrderCustomer
+from collections import defaultdict
+from decimal import Decimal
 
 class OrderViewSet(mixins.ListModelMixin,
                    mixins.RetrieveModelMixin,
@@ -98,10 +101,33 @@ class OrderViewSet(mixins.ListModelMixin,
                 status=status.HTTP_400_BAD_REQUEST
             )
         
+        # Group cart items by seller to calculate shipping
+        seller_items = defaultdict(list)
+        seller_subtotals = defaultdict(Decimal)
+        
+        for cart_item in cart.items.all():
+            seller = cart_item.product.seller
+            seller_items[seller.id].append(cart_item)
+            seller_subtotals[seller.id] += Decimal(cart_item.subtotal)
+        
+        # Calculate shipping costs for each seller
+        total_shipping = Decimal('0.00')
+        
+        for seller_id, subtotal in seller_subtotals.items():
+            try:
+                shipping_method = ShippingMethod.objects.get(seller_id=seller_id)
+                shipping_cost = shipping_method.calculate_shipping_cost(subtotal)
+                total_shipping += Decimal(shipping_cost)
+            except ShippingMethod.DoesNotExist:
+                # No shipping method found, assume free shipping
+                pass
+        
         # Create order
         order = Order.objects.create(
             customer=user,
-            total_amount=cart.total_amount,
+            subtotal_amount=cart.total_amount,
+            shipping_amount=total_shipping,
+            total_amount=cart.total_amount + total_shipping,
             status='pending',
             shipping_address=serializer.validated_data.get('shipping_address'),
             notes=serializer.validated_data.get('notes', '')
@@ -215,4 +241,3 @@ class OrderViewSet(mixins.ListModelMixin,
             pass
         
         return Response(OrderSerializer(order).data)
-

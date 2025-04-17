@@ -16,6 +16,8 @@ class Order(models.Model):
     created_at = models.DateTimeField(default=timezone.now)
     updated_at = models.DateTimeField(auto_now=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    subtotal_amount = models.DecimalField(max_digits=10, decimal_places=2)
+    shipping_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
     total_amount = models.DecimalField(max_digits=10, decimal_places=2)
     shipping_address = models.TextField(blank=True, null=True)
     tracking_number = models.CharField(max_length=100, blank=True, null=True)
@@ -23,6 +25,12 @@ class Order(models.Model):
     
     def __str__(self):
         return f"Order {self.id} by {self.customer.username}"
+    
+    def save(self, *args, **kwargs):
+        # Ensure total_amount is always subtotal + shipping
+        if self.subtotal_amount is not None and self.shipping_amount is not None:
+            self.total_amount = self.subtotal_amount + self.shipping_amount
+        super().save(*args, **kwargs)
 
 class OrderItem(models.Model):
     order = models.ForeignKey(Order, related_name='items', on_delete=models.CASCADE)
@@ -59,4 +67,3 @@ class Payment(models.Model):
 
     def __str__(self):
         return f"Payment for Order {self.order.id}"
-

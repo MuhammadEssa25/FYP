@@ -10,6 +10,8 @@ class CustomUser(AbstractUser):
     role = models.CharField(max_length=10, choices=ROLE_CHOICES, default='customer')
     address = models.TextField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    # Note: AbstractUser already has is_active and last_login fields
+    # We'll just use those instead of creating duplicates
 
     def __str__(self):
         return self.username

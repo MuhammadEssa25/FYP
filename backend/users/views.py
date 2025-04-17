@@ -6,6 +6,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiExample, OpenApiResponse
 from drf_spectacular.types import OpenApiTypes
 from django.db import transaction
+from django.utils import timezone
 from .models import CustomUser
 from .serializers import CustomUserSerializer, LoginSerializer
 from permissions import IsAdmin
@@ -56,6 +57,10 @@ def user_login(request):
             {'error': 'Invalid username or password'},
             status=status.HTTP_401_UNAUTHORIZED
         )
+    
+    # Update last login time
+    user.last_login = timezone.now()
+    user.save(update_fields=['last_login'])
     
     refresh = RefreshToken.for_user(user)
     return Response({
@@ -108,4 +113,25 @@ class UserViewSet(viewsets.ModelViewSet):
         """Get the current user's profile"""
         serializer = self.get_serializer(request.user)
         return Response(serializer.data)
-
+    
+    @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated, IsAdmin])
+    def active(self, request):
+        """Get all active users"""
+        active_users = CustomUser.objects.filter(is_active=True)
+        page = self.paginate_queryset(active_users)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+        serializer = self.get_serializer(active_users, many=True)
+        return Response(serializer.data)
+    
+    @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated, IsAdmin])
+    def inactive(self, request):
+        """Get all inactive users"""
+        inactive_users = CustomUser.objects.filter(is_active=False)
+        page = self.paginate_queryset(inactive_users)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+        serializer = self.get_serializer(inactive_users, many=True)
+        return Response(serializer.data)

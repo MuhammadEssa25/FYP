@@ -5,6 +5,7 @@ from django.shortcuts import get_object_or_404
 from .models import Cart, CartItem
 from .serializers import CartSerializer, CartItemSerializer
 from products.models import Product
+from shipping.models import ShippingMethod
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiExample
 from drf_spectacular.types import OpenApiTypes
 from permissions import IsCartOwner
@@ -32,6 +33,39 @@ class CartViewSet(viewsets.GenericViewSet):
         cart, created = Cart.objects.get_or_create(customer=request.user)
         serializer = self.get_serializer(cart)
         return Response(serializer.data)
+    
+    @extend_schema(
+        description='Calculate shipping costs for the current cart',
+        responses={200: {
+            'type': 'object',
+            'properties': {
+                'shipping_details': {
+                    'type': 'array',
+                    'items': {
+                        'type': 'object',
+                        'properties': {
+                            'seller_id': {'type': 'integer'},
+                            'seller_name': {'type': 'string'},
+                            'subtotal': {'type': 'number'},
+                            'shipping_cost': {'type': 'number'},
+                            'shipping_type': {'type': 'string'},
+                            'free_shipping_threshold': {'type': 'number'},
+                            'qualifies_for_free_shipping': {'type': 'boolean'}
+                        }
+                    }
+                },
+                'total_shipping': {'type': 'number'},
+                'grand_total': {'type': 'number'}
+            }
+        }}
+    )
+    @action(detail=False, methods=['get'])
+    def shipping_costs(self, request):
+        """Calculate shipping costs for the current cart"""
+        cart, created = Cart.objects.get_or_create(customer=request.user)
+        serializer = self.get_serializer(cart)
+        shipping_info = serializer.data.get('shipping_info', {})
+        return Response(shipping_info)
     
     @extend_schema(
         request=OpenApiTypes.OBJECT,
@@ -71,12 +105,13 @@ class CartViewSet(viewsets.GenericViewSet):
             cart, created = Cart.objects.get_or_create(customer=request.user)
             
             # Get product and quantity from request
-            product_id = request.data.get('product')
+            # Check both query parameters and request body
+            product_id = request.query_params.get('product') or request.data.get('product')
             if not product_id:
                 return Response({"error": "Product ID is required"}, status=status.HTTP_400_BAD_REQUEST)
             
             try:
-                quantity = int(request.data.get('quantity', 1))
+                quantity = int(request.query_params.get('quantity') or request.data.get('quantity', 1))
                 if quantity <= 0:
                     return Response({"error": "Quantity must be greater than zero"}, status=status.HTTP_400_BAD_REQUEST)
             except ValueError:
@@ -99,8 +134,6 @@ class CartViewSet(viewsets.GenericViewSet):
             try:
                 cart_item = CartItem.objects.get(cart=cart, product=product)
                 # Update quantity 
-                cart_item = CartItem.objects.get(cart=cart, product=product)
-                # Update quantity
                 cart_item.quantity += quantity
                 # Validate stock again
                 if product.stock < cart_item.quantity:
@@ -164,12 +197,13 @@ class CartViewSet(viewsets.GenericViewSet):
         try:
             cart = get_object_or_404(Cart, customer=request.user)
             
-            item_id = request.data.get('item_id')
+            # Check both query parameters and request body
+            item_id = request.query_params.get('item_id') or request.data.get('item_id')
             if not item_id:
                 return Response({"error": "Item ID is required"}, status=status.HTTP_400_BAD_REQUEST)
             
             try:
-                quantity = int(request.data.get('quantity', 1))
+                quantity = int(request.query_params.get('quantity') or request.data.get('quantity', 1))
                 if quantity <= 0:
                     return Response({"error": "Quantity must be greater than zero"}, status=status.HTTP_400_BAD_REQUEST)
             except ValueError:
@@ -230,7 +264,8 @@ class CartViewSet(viewsets.GenericViewSet):
         try:
             cart = get_object_or_404(Cart, customer=request.user)
             
-            item_id = request.data.get('item_id')
+            # Check both query parameters and request body
+            item_id = request.query_params.get('item_id') or request.data.get('item_id')
             if not item_id:
                 return Response({"error": "Item ID is required"}, status=status.HTTP_400_BAD_REQUEST)
             
@@ -267,4 +302,3 @@ class CartViewSet(viewsets.GenericViewSet):
         except Exception as e:
             logger.error(f"Error clearing cart: {str(e)}")
             return Response({"error": f"An error occurred: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-

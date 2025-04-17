@@ -20,10 +20,10 @@ urlpatterns = [
     path('api/products/', include('products.urls')),
     path('api/orders/', include('orders.urls')),
     path('api/analytics/', include('analytics.urls')),
-    path('api/cart/', include('carts.urls')),  # Add this line
+    path('api/cart/', include('carts.urls')),
+    path('api/shipping/', include('shipping.urls')),  # Add this line
 ]
 
 # Serve media files in development
 if settings.DEBUG:
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
-

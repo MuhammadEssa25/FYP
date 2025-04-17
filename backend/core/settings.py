@@ -33,6 +33,7 @@ INSTALLED_APPS = [
     'orders',
     'analytics',
     'carts',
+    'shipping',  # Add this line
 ]
 
 MIDDLEWARE = [
