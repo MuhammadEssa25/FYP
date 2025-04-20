@@ -1,6 +1,5 @@
 from django.db import models
-from users.models import CustomUser
-from products.models import Product
+from django.conf import settings
 
 class ShippingMethod(models.Model):
     SHIPPING_TYPE_CHOICES = (
@@ -8,7 +7,7 @@ class ShippingMethod(models.Model):
         ('flat_rate', 'Flat Rate'),
     )
     
-    seller = models.OneToOneField(CustomUser, on_delete=models.CASCADE, related_name='shipping_method')
+    seller = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='shipping_method')
     shipping_type = models.CharField(max_length=10, choices=SHIPPING_TYPE_CHOICES, default='flat_rate')
     flat_rate_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
     free_shipping_threshold = models.DecimalField(max_digits=10, decimal_places=2, default=0.00, 
@@ -38,7 +37,7 @@ class ShippingMethod(models.Model):
 
 # Product-specific shipping overrides (optional)
 class ProductShippingOverride(models.Model):
-    product = models.OneToOneField(Product, on_delete=models.CASCADE, related_name='shipping_override')
+    product = models.OneToOneField('products.Product', on_delete=models.CASCADE, related_name='shipping_override')
     override_seller_settings = models.BooleanField(default=False)
     shipping_type = models.CharField(max_length=10, choices=ShippingMethod.SHIPPING_TYPE_CHOICES, default='flat_rate')
     flat_rate_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)

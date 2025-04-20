@@ -64,7 +64,20 @@ pip install -r requirements.txt
 
 If requirements.txt is not available, manually install the required packages:
 pip install django djangorestframework djangorestframework-simplejwt drf-spectacular pillow psycopg psycopg2 django-allauth drf-spectacular djangorestframework-simplejwt django djangorestframework django-cors-headers django-environ environ  
+
+For windows, change the core/settings.py file and add these three line below imports
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+env = environ.Env()
+env.read_env(os.path.join(BASE_DIR, '.env'))
+
+in place of
+env = environ.Env()
+
+environ.Env.read_env()
+BASE_DIR = Path(__file__).resolve().parent.parent
 ```
+
 
 ### 3. Database Setup
 ```bash

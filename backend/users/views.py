@@ -1,6 +1,6 @@
 from rest_framework import status, viewsets
 from rest_framework.decorators import api_view, permission_classes, action
-from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated, BasePermission
 from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiExample, OpenApiResponse
@@ -11,6 +11,23 @@ from .models import CustomUser
 from .serializers import CustomUserSerializer, LoginSerializer
 from permissions import IsAdmin
 
+# Custom permission class defined directly in views.py
+class IsOwnerOrAdmin(BasePermission):
+    """
+    Custom permission to only allow owners of an account or admins to edit it.
+    """
+    def has_object_permission(self, request, view, obj):
+        # Read permissions are allowed to any request
+        if request.method in ['GET', 'HEAD', 'OPTIONS']:
+            return True
+
+        # Allow admins to edit any profile
+        if request.user.is_staff or request.user.role == 'admin':
+            return True
+            
+        # Allow users to edit their own profile
+        return obj.id == request.user.id
+
 @extend_schema(
     request=LoginSerializer,
     responses={
@@ -18,7 +35,6 @@ from permissions import IsAdmin
             description="Login successful",
             response={"type": "object", "properties": {
                 "access": {"type": "string"},
-                "refresh": {"type": "string"},
                 "user": {"type": "object"}
             }}
         ),
@@ -35,13 +51,13 @@ from permissions import IsAdmin
             request_only=True,
         )
     ],
-    description="Authenticate user and return JWT tokens"
+    description="Authenticate user and return JWT access token"
 )
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def user_login(request):
     """
-    Authenticate user and return JWT tokens
+    Authenticate user and return JWT access token
     """
     serializer = LoginSerializer(data=request.data)
     if not serializer.is_valid():
@@ -65,7 +81,6 @@ def user_login(request):
     refresh = RefreshToken.for_user(user)
     return Response({
         'access': str(refresh.access_token),
-        'refresh': str(refresh),
         'user': CustomUserSerializer(user).data
     })
 
@@ -76,10 +91,17 @@ class UserViewSet(viewsets.ModelViewSet):
     def get_permissions(self):
         if self.action == 'create':
             return [AllowAny()]
-        elif self.action in ['list', 'retrieve', 'update', 'partial_update', 'destroy']:
+        elif self.action in ['update', 'partial_update', 'destroy']:
+            # Use IsOwnerOrAdmin for update operations
+            return [IsAuthenticated(), IsOwnerOrAdmin()]
+        elif self.action == 'list':
+            # Only admins can list all users
             if self.request.user.is_authenticated and self.request.user.role == 'admin':
                 return [IsAuthenticated()]
             return [IsAuthenticated(), IsAdmin()]
+        elif self.action == 'retrieve':
+            # Use IsOwnerOrAdmin for retrieve operations
+            return [IsAuthenticated(), IsOwnerOrAdmin()]
         return [IsAuthenticated()]
     
     def get_queryset(self):
@@ -113,6 +135,7 @@ class UserViewSet(viewsets.ModelViewSet):
         """Get the current user's profile"""
         serializer = self.get_serializer(request.user)
         return Response(serializer.data)
+    
     
     @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated, IsAdmin])
     def active(self, request):

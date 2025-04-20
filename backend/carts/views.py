@@ -1,3 +1,4 @@
+# cart/views.py
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -71,7 +72,7 @@ class CartViewSet(viewsets.GenericViewSet):
         request=OpenApiTypes.OBJECT,
         parameters=[
             OpenApiParameter(
-                name='product',
+                name='product_id',
                 description='Product ID to add to cart',
                 required=True,
                 type=int,
@@ -89,7 +90,7 @@ class CartViewSet(viewsets.GenericViewSet):
             OpenApiExample(
                 'Example Request',
                 value={
-                    'product': 1,
+                    'product_id': 1,
                     'quantity': 2
                 },
                 request_only=True,
@@ -106,7 +107,7 @@ class CartViewSet(viewsets.GenericViewSet):
             
             # Get product and quantity from request
             # Check both query parameters and request body
-            product_id = request.query_params.get('product') or request.data.get('product')
+            product_id = request.query_params.get('product_id') or request.data.get('product_id')
             if not product_id:
                 return Response({"error": "Product ID is required"}, status=status.HTTP_400_BAD_REQUEST)
             
@@ -151,6 +152,7 @@ class CartViewSet(viewsets.GenericViewSet):
                     quantity=quantity
                 )
                 logger.info(f"Created new cart item: {cart_item.id}, product: {product.id}, quantity: {quantity}")
+            
             
             # Return updated cart
             cart.refresh_from_db()  # Refresh to ensure we get the latest data

@@ -3,16 +3,10 @@ from .views import ProductViewSet, CategoryViewSet
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
-# Debug view to check if the URL routing is working
-@api_view(['GET'])
-def debug_view(request):
-    return Response({"message": "Debug view is working!"})
 
 # Define URL patterns explicitly
 urlpatterns = [
-    # Debug route
-    path('debug/', debug_view, name='debug'),
-    
+
     # Product routes
     path('', ProductViewSet.as_view({
         'get': 'list',
@@ -26,6 +20,19 @@ urlpatterns = [
         'delete': 'destroy'
     }), name='product-detail'),
     
+    # Seller-specific product routes
+    path('my-products/', ProductViewSet.as_view({
+        'get': 'my_products'
+    }), name='my-products'),
+    
+    path('my-images/', ProductViewSet.as_view({
+        'get': 'my_images'
+    }), name='my-images'),
+    
+    path('all-images/', ProductViewSet.as_view({
+        'get': 'all_images'
+    }), name='all-images'),
+    
     # Category routes
     path('categories/', CategoryViewSet.as_view({
         'get': 'list',
@@ -38,6 +45,11 @@ urlpatterns = [
         'patch': 'partial_update',
         'delete': 'destroy'
     }), name='category-detail'),
+    
+    # Seller-specific category routes
+    path('categories/my-categories/', CategoryViewSet.as_view({
+        'get': 'my_categories'
+    }), name='my-categories'),
     
     # Category custom actions
     path('categories/<int:pk>/subcategories/', CategoryViewSet.as_view({
@@ -53,8 +65,7 @@ urlpatterns = [
         'post': 'add_review'
     }), name='product-add-review'),
     
-    path('<int:pk>/upload-images/', ProductViewSet.as_view({
-        'post': 'upload_images'
-    }), name='product-upload-images'),
+    path('<int:pk>/upload-files/', ProductViewSet.as_view({
+        'post': 'upload_files'
+    }), name='product-upload-files'),
 ]
-

@@ -27,13 +27,13 @@ INSTALLED_APPS = [
     'rest_framework_simplejwt',
     'drf_spectacular',
     
-    # Local apps
-    'users',
-    'products',
-    'orders',
-    'analytics',
-    'carts',
-    'shipping',  # Add this line
+    # Local apps - order matters for dependencies
+    'users',  # First because other apps depend on it
+    'products',  # Second because carts and orders depend on it
+    'carts',  # Third because orders depend on it
+    'shipping',  # Depends on users and products
+    'orders',  # Depends on users, products, and carts
+    'analytics',  # Last because it might depend on other apps
 ]
 
 MIDDLEWARE = [
@@ -119,13 +119,10 @@ REST_FRAMEWORK = {
     ],
 }
 
-
-
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(minutes=60),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=1),
 }
-
 
 SPECTACULAR_SETTINGS = {
     'TITLE': 'E-Commerce API',

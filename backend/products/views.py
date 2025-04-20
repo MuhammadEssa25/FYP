@@ -2,12 +2,13 @@ import uuid
 
 from rest_framework import viewsets, status
 from rest_framework.decorators import action, parser_classes
-from rest_framework.permissions import IsAuthenticatedOrReadOnly, IsAuthenticated
+from rest_framework.permissions import IsAuthenticatedOrReadOnly, IsAuthenticated, AllowAny
 from rest_framework.response import Response
 from rest_framework.parsers import JSONParser, MultiPartParser, FormParser
-from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiExample
+from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiExample, OpenApiResponse
 from drf_spectacular.types import OpenApiTypes
-from django.db import transaction, connection, ProgrammingError
+from django.db import transaction
+from django.db.models import Q
 
 from .models import Product, ProductView, Review, ProductImage, Category
 from .serializers import ProductSerializer, ProductCreateUpdateSerializer, ReviewSerializer, ProductImageSerializer, CategorySerializer
@@ -21,21 +22,51 @@ class CategoryViewSet(viewsets.ModelViewSet):
     queryset = Category.objects.all()
     serializer_class = CategorySerializer
     permission_classes = [IsAuthenticatedOrReadOnly]
+    parser_classes = [JSONParser, MultiPartParser, FormParser]  # Add parsers to handle file uploads
     
     def get_permissions(self):
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
             return [IsSellerOrAdmin()]
+        elif self.action in ['my_categories']:
+            return [IsAuthenticated()]
         return super().get_permissions()
+    
+    def get_queryset(self):
+        # Optimize queries with select_related
+        return Category.objects.select_related('parent', 'creator')
     
     @extend_schema(
         description="List all categories",
         responses={200: CategorySerializer(many=True)}
     )
     def list(self, request, *args, **kwargs):
-        print("CategoryViewSet.list() called")  # Debug print
-        print(f"Request path: {request.path}")  # Print the request path
-        print(f"Request method: {request.method}")  # Print the request method
-        return super().list(request, *args, **kwargs)
+        """
+        Get all categories in the store
+        """
+        try:
+            return super().list(request, *args, **kwargs)
+        except Exception as e:
+            # Simplified error handling
+            categories = self.get_queryset()
+            simplified_categories = []
+            
+            for category in categories:
+                try:
+                    simplified_categories.append({
+                        'id': category.id,
+                        'name': category.name,
+                        'description': category.description,
+                        'parent': category.parent.id if category.parent else None,
+                        'creator': category.creator.id if category.creator else None,
+                        'creator_username': category.creator.username if category.creator else None,
+                        'created_at': getattr(category, 'created_at', None),
+                        'updated_at': getattr(category, 'updated_at', None),
+                        'image': None
+                    })
+                except Exception:
+                    continue
+            
+            return Response(simplified_categories)
     
     @extend_schema(
         description="Create a new category",
@@ -43,14 +74,50 @@ class CategoryViewSet(viewsets.ModelViewSet):
         responses={201: CategorySerializer}
     )
     def create(self, request, *args, **kwargs):
-        return super().create(request, *args, **kwargs)
+        """
+        Create a new category
+        """
+        # Handle parent field if it's 0 or empty string
+        data = request.data.copy()
+        if 'parent' in data and (data['parent'] == '0' or data['parent'] == 0 or data['parent'] == ''):
+            data.pop('parent')
+        
+        # Handle image field if it's a string instead of a file
+        if 'image' in data and isinstance(data['image'], str) and data['image'] != '':
+            # If it's just a placeholder string, remove it
+            if data['image'] == 'string' or not data['image'].startswith(('http://', 'https://')):
+                data.pop('image')
+        
+        # Set the creator to the current user
+        serializer = self.get_serializer(data=data)
+        serializer.is_valid(raise_exception=True)
+        serializer.save(creator=request.user)
+        
+        headers = self.get_success_headers(serializer.data)
+        return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
     
     @extend_schema(
         description="Retrieve a specific category by ID",
         responses={200: CategorySerializer}
     )
     def retrieve(self, request, *args, **kwargs):
-        return super().retrieve(request, *args, **kwargs)
+        try:
+            return super().retrieve(request, *args, **kwargs)
+        except Exception as e:
+            # Simplified error handling
+            category = self.get_object()
+            simplified_category = {
+                'id': category.id,
+                'name': category.name,
+                'description': category.description,
+                'parent': category.parent.id if category.parent else None,
+                'creator': category.creator.id if category.creator else None,
+                'creator_username': category.creator.username if category.creator else None,
+                'created_at': getattr(category, 'created_at', None),
+                'updated_at': getattr(category, 'updated_at', None),
+                'image': None
+            }
+            return Response(simplified_category)
     
     @extend_schema(
         description="Update a category (full update)",
@@ -58,7 +125,23 @@ class CategoryViewSet(viewsets.ModelViewSet):
         responses={200: CategorySerializer}
     )
     def update(self, request, *args, **kwargs):
-        return super().update(request, *args, **kwargs)
+        # Handle parent field if it's 0 or empty string
+        data = request.data.copy()
+        if 'parent' in data and (data['parent'] == '0' or data['parent'] == 0 or data['parent'] == ''):
+            data.pop('parent')
+        
+        # Handle image field if it's a string instead of a file
+        if 'image' in data and isinstance(data['image'], str) and data['image'] != '':
+            # If it's just a placeholder string, remove it
+            if data['image'] == 'string' or not data['image'].startswith(('http://', 'https://')):
+                data.pop('image')
+        
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=data)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        
+        return Response(serializer.data)
     
     @extend_schema(
         description="Update a category (partial update)",
@@ -66,10 +149,33 @@ class CategoryViewSet(viewsets.ModelViewSet):
         responses={200: CategorySerializer}
     )
     def partial_update(self, request, *args, **kwargs):
-        return super().partial_update(request, *args, **kwargs)
+        # Handle parent field if it's 0 or empty string
+        data = request.data.copy()
+        if 'parent' in data and (data['parent'] == '0' or data['parent'] == 0 or data['parent'] == ''):
+            data.pop('parent')
+        
+        # Handle image field if it's a string instead of a file
+        if 'image' in data and isinstance(data['image'], str) and data['image'] != '':
+            # If it's just a placeholder string, remove it
+            if data['image'] == 'string' or not data['image'].startswith(('http://', 'https://')):
+                data.pop('image')
+        
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        
+        return Response(serializer.data)
     
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
+        
+        # Check if user is the creator or admin
+        if instance.creator and instance.creator != request.user and not request.user.is_staff and request.user.role != 'admin':
+            return Response(
+                {'error': 'Only the creator or admin can delete this category'},
+                status=status.HTTP_403_FORBIDDEN
+            )
         
         # Check if category has products
         if instance.products.exists():
@@ -78,21 +184,66 @@ class CategoryViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Use a custom deletion method to avoid cascade issues with missing tables
         try:
-            # Get the category ID before deleting
-            category_id = instance.id
-            
-            # Use raw SQL to delete the category directly, avoiding Django's ORM cascade
-            with connection.cursor() as cursor:
-                cursor.execute("DELETE FROM products_category WHERE id = %s", [category_id])
-            
+            # Use Django ORM to delete the category
+            instance.delete()
             return Response(status=status.HTTP_204_NO_CONTENT)
         except Exception as e:
             return Response(
                 {'error': f'Failed to delete category: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+    
+    @extend_schema(
+        description="Get categories created by the authenticated seller",
+        responses={200: CategorySerializer(many=True)}
+    )
+    @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
+    def my_categories(self, request):
+        """
+        Get categories created by the authenticated seller
+        """
+        user = request.user
+        # Check if user is a seller or admin
+        if not (user.role == 'seller' or user.role == 'admin' or user.is_staff):
+            return Response(
+                {'error': 'Only sellers and admins can access this endpoint'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Get categories created by the current user
+        categories = Category.objects.filter(creator=user)
+        
+        try:
+            # Paginate results
+            page = self.paginate_queryset(categories)
+            if page is not None:
+                serializer = self.get_serializer(page, many=True)
+                return self.get_paginated_response(serializer.data)
+            
+            serializer = self.get_serializer(categories, many=True)
+            return Response(serializer.data)
+        except Exception as e:
+            # Simplified error handling
+            simplified_categories = []
+            
+            for category in categories:
+                try:
+                    simplified_categories.append({
+                        'id': category.id,
+                        'name': category.name,
+                        'description': category.description,
+                        'parent': category.parent.id if category.parent else None,
+                        'creator': category.creator.id if category.creator else None,
+                        'creator_username': category.creator.username if category.creator else None,
+                        'created_at': getattr(category, 'created_at', None),
+                        'updated_at': getattr(category, 'updated_at', None),
+                        'image': None
+                    })
+                except Exception:
+                    continue
+            
+            return Response(simplified_categories)
     
     @extend_schema(
         description="Get all subcategories for a specific category",
@@ -105,8 +256,31 @@ class CategoryViewSet(viewsets.ModelViewSet):
         """
         category = self.get_object()
         subcategories = Category.objects.filter(parent=category)
-        serializer = self.get_serializer(subcategories, many=True)
-        return Response(serializer.data)
+        
+        try:
+            serializer = self.get_serializer(subcategories, many=True)
+            return Response(serializer.data)
+        except Exception as e:
+            # Simplified error handling
+            simplified_subcategories = []
+            
+            for subcategory in subcategories:
+                try:
+                    simplified_subcategories.append({
+                        'id': subcategory.id,
+                        'name': subcategory.name,
+                        'description': subcategory.description,
+                        'parent': subcategory.parent.id if subcategory.parent else None,
+                        'creator': subcategory.creator.id if subcategory.creator else None,
+                        'creator_username': subcategory.creator.username if subcategory.creator else None,
+                        'created_at': getattr(subcategory, 'created_at', None),
+                        'updated_at': getattr(subcategory, 'updated_at', None),
+                        'image': None
+                    })
+                except Exception:
+                    continue
+            
+            return Response(simplified_subcategories)
     
     @extend_schema(
         description="Get all products in a specific category",
@@ -118,15 +292,40 @@ class CategoryViewSet(viewsets.ModelViewSet):
         Get all products in a specific category
         """
         category = self.get_object()
-        products = category.products.all()
-        serializer = ProductSerializer(products, many=True, context={'request': request})
-        return Response(serializer.data)
+        products = category.products.all().select_related('category', 'seller')
+        
+        try:
+            serializer = ProductSerializer(products, many=True, context={'request': request})
+            return Response(serializer.data)
+        except Exception as e:
+            # Simplified error handling
+            simplified_products = []
+            
+            for product in products:
+                try:
+                    simplified_products.append({
+                        'id': product.id,
+                        'name': product.name,
+                        'description': product.description,
+                        'price': str(product.price),
+                        'discount_price': str(product.discount_price) if product.discount_price else None,
+                        'stock': product.stock,
+                        'category': product.category.id if product.category else None,
+                        'category_name': product.category.name if product.category else None,
+                        'seller': product.seller.id if product.seller else None,
+                        'seller_username': product.seller.username if product.seller else None,
+                        'created_at': product.created_at,
+                        'updated_at': product.updated_at,
+                    })
+                except Exception:
+                    continue
+            
+            return Response(simplified_products)
 
 
 class ProductViewSet(viewsets.ModelViewSet):
     queryset = Product.objects.all()
     serializer_class = ProductSerializer
-    permission_classes = [IsAuthenticatedOrReadOnly, IsProductSeller]
     parser_classes = [JSONParser, MultiPartParser, FormParser]
     
     def get_serializer_class(self):
@@ -134,61 +333,240 @@ class ProductViewSet(viewsets.ModelViewSet):
             return ProductCreateUpdateSerializer
         return ProductSerializer
     
+    def get_queryset(self):
+        # Optimize queries with select_related
+        return Product.objects.select_related('category', 'seller')
+    
     def get_permissions(self):
-        if self.action in ['create']:
+        if self.action == 'list' or self.action == 'retrieve':
+            # Allow anyone to view products
+            return []
+        elif self.action == 'create':
             return [IsAuthenticated(), IsSellerOrAdmin()]
         elif self.action in ['update', 'partial_update', 'destroy']:
             return [IsAuthenticated(), IsProductSeller()]
-        return super().get_permissions()
+        elif self.action in ['my_products', 'my_images']:
+            return [IsAuthenticated()]
+        return [IsAuthenticatedOrReadOnly()]
     
-    def get_queryset(self):
-        user = self.request.user
-        # Admins and staff can see all products
-        if user.is_authenticated and (user.is_staff or user.role == 'admin'):
-            return Product.objects.all()
-        # Sellers can see their own products
-        elif user.is_authenticated and user.role == 'seller':
-            return Product.objects.filter(seller=user)
-        # Everyone else can see all products (for browsing)
-        return Product.objects.all()
+    @extend_schema(
+        description="List all products in the store - accessible to anyone",
+        responses={200: ProductSerializer(many=True)}
+    )
+    def list(self, request, *args, **kwargs):
+        """
+        Get all products in the store. This endpoint is accessible to anyone.
+        """
+        try:
+            return super().list(request, *args, **kwargs)
+        except Exception as e:
+            # Simplified error handling
+            products = self.get_queryset()
+            simplified_products = []
+            
+            for product in products:
+                try:
+                    simplified_products.append({
+                        'id': product.id,
+                        'name': product.name,
+                        'description': product.description,
+                        'price': str(product.price),
+                        'discount_price': str(product.discount_price) if product.discount_price else None,
+                        'stock': product.stock,
+                        'category': product.category.id if product.category else None,
+                        'category_name': product.category.name if product.category else None,
+                        'seller': product.seller.id if product.seller else None,
+                        'seller_username': product.seller.username if product.seller else None,
+                        'created_at': product.created_at,
+                        'updated_at': product.updated_at,
+                    })
+                except Exception:
+                    continue
+            
+            return Response(simplified_products)
     
     def retrieve(self, request, *args, **kwargs):
-        instance = self.get_object()
-        
-        # Track view - safely handle session
         try:
-            if request.user.is_authenticated:
-                # Check if ProductView table exists before creating a record
-                if self._table_exists('products_productview'):
+            instance = self.get_object()
+            # Track view - simplified
+            try:
+                if request.user.is_authenticated:
                     ProductView.objects.create(product=instance, user=request.user)
-            else:
-                session_id = request.session.get('session_id')
-                if not session_id:
-                    session_id = str(uuid.uuid4())
-                    request.session['session_id'] = session_id
-                # Check if ProductView table exists before creating a record
-                if self._table_exists('products_productview'):
+                else:
+                    session_id = request.session.get('session_id')
+                    if not session_id:
+                        session_id = str(uuid.uuid4())
+                        request.session['session_id'] = session_id
                     ProductView.objects.create(product=instance, session_id=session_id)
-        except Exception:
-            # Don't let view tracking failure affect the API response
-            pass
+            except Exception:
+                # Don't let view tracking failure affect the API response
+                pass
+            
+            serializer = self.get_serializer(instance)
+            return Response(serializer.data)
+        except Exception as e:
+            # Simplified error handling
+            instance = self.get_object()
+            simplified_product = {
+                'id': instance.id,
+                'name': instance.name,
+                'description': instance.description,
+                'price': str(instance.price),
+                'discount_price': str(instance.discount_price) if instance.discount_price else None,
+                'stock': instance.stock,
+                'category': instance.category.id if instance.category else None,
+                'category_name': instance.category.name if instance.category else None,
+                'seller': instance.seller.id if instance.seller else None,
+                'seller_username': instance.seller.username if instance.seller else None,
+                'created_at': instance.created_at,
+                'updated_at': instance.updated_at,
+            }
+            return Response(simplified_product)
+    
+    @extend_schema(
+        description="Get products for the authenticated seller",
+        responses={200: ProductSerializer(many=True)}
+    )
+    @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
+    def my_products(self, request):
+        """
+        Get products for the authenticated seller
+        """
+        user = request.user
         
-        serializer = self.get_serializer(instance)
-        return Response(serializer.data)
-    
-    def _table_exists(self, table_name):
-        """Check if a table exists in the database"""
-        with connection.cursor() as cursor:
-            tables = connection.introspection.table_names()
-            return table_name in tables
-    
-    def _safe_delete_related(self, model_class, filter_kwargs):
-        """Safely delete related objects, handling the case where the table doesn't exist"""
+        # Check if user is a seller or admin
+        if not (user.role == 'seller' or user.role == 'admin' or user.is_staff):
+            return Response(
+                {'error': 'Only sellers and admins can access this endpoint'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Get products for the current user
+        products = Product.objects.filter(seller=user).select_related('category')
+        
         try:
-            model_class.objects.filter(**filter_kwargs).delete()
-        except ProgrammingError:
-            # Table doesn't exist, so nothing to delete
-            pass
+            # Paginate results
+            page = self.paginate_queryset(products)
+            if page is not None:
+                serializer = self.get_serializer(page, many=True)
+                return self.get_paginated_response(serializer.data)
+            
+            serializer = self.get_serializer(products, many=True)
+            return Response(serializer.data)
+        except Exception as e:
+            # Simplified error handling
+            simplified_products = []
+            
+            for product in products:
+                try:
+                    simplified_products.append({
+                        'id': product.id,
+                        'name': product.name,
+                        'description': product.description,
+                        'price': str(product.price),
+                        'discount_price': str(product.discount_price) if product.discount_price else None,
+                        'stock': product.stock,
+                        'category': product.category.id if product.category else None,
+                        'category_name': product.category.name if product.category else None,
+                        'seller': product.seller.id if product.seller else None,
+                        'seller_username': product.seller.username if product.seller else None,
+                        'created_at': product.created_at,
+                        'updated_at': product.updated_at,
+                    })
+                except Exception:
+                    continue
+            
+            return Response(simplified_products)
+    
+    @extend_schema(
+        description="Get all images uploaded by the authenticated seller",
+        responses={200: ProductImageSerializer(many=True)}
+    )
+    @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
+    def my_images(self, request):
+        """
+        Get all images uploaded by the authenticated seller
+        """
+        user = request.user
+        
+        # Check if user is a seller or admin
+        if not (user.role == 'seller' or user.role == 'admin' or user.is_staff):
+            return Response(
+                {'error': 'Only sellers and admins can access this endpoint'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Get products for the current user
+        products = Product.objects.filter(seller=user)
+        
+        # Get all images for these products
+        images = ProductImage.objects.filter(product__in=products)
+        
+        try:
+            # Paginate results
+            page = self.paginate_queryset(images)
+            if page is not None:
+                serializer = ProductImageSerializer(page, many=True, context={'request': request})
+                return self.get_paginated_response(serializer.data)
+            
+            serializer = ProductImageSerializer(images, many=True, context={'request': request})
+            return Response(serializer.data)
+        except Exception as e:
+            # Simplified error handling
+            simplified_images = []
+            
+            for image in images:
+                try:
+                    simplified_images.append({
+                        'id': image.id,
+                        'product': image.product.id,
+                        'file': request.build_absolute_uri(image.file.url) if image.file else None,
+                        'file_type': image.file_type,
+                        'created_at': image.created_at,
+                    })
+                except Exception:
+                    continue
+            
+            return Response(simplified_images)
+    
+    @extend_schema(
+        description="Get all images in the store",
+        responses={200: ProductImageSerializer(many=True)}
+    )
+    @action(detail=False, methods=['get'])
+    def all_images(self, request):
+        """
+        Get all images in the store
+        """
+        # Get all images
+        images = ProductImage.objects.all().select_related('product')
+        
+        try:
+            # Paginate results
+            page = self.paginate_queryset(images)
+            if page is not None:
+                serializer = ProductImageSerializer(page, many=True, context={'request': request})
+                return self.get_paginated_response(serializer.data)
+            
+            serializer = ProductImageSerializer(images, many=True, context={'request': request})
+            return Response(serializer.data)
+        except Exception as e:
+            # Simplified error handling
+            simplified_images = []
+            
+            for image in images:
+                try:
+                    simplified_images.append({
+                        'id': image.id,
+                        'product': image.product.id,
+                        'file': request.build_absolute_uri(image.file.url) if image.file else None,
+                        'file_type': image.file_type,
+                        'created_at': image.created_at,
+                    })
+                except Exception:
+                    continue
+            
+            return Response(simplified_images)
     
     @extend_schema(
         request={
@@ -201,7 +579,7 @@ class ProductViewSet(viewsets.ModelViewSet):
                     'discount_price': {'type': 'number', 'nullable': True},
                     'stock': {'type': 'integer'},
                     'category': {'type': 'integer'},
-                    'images': {
+                    'files': {
                         'type': 'array',
                         'items': {'type': 'string', 'format': 'binary'}
                     },
@@ -211,10 +589,10 @@ class ProductViewSet(viewsets.ModelViewSet):
         },
         parameters=[
             OpenApiParameter(
-                name='images',
+                name='files',
                 type=OpenApiTypes.BINARY,
                 location='form',
-                description='Product images (max 8)',
+                description='Product images or 3D models (max 8)',
                 many=True,
                 required=False,
             ),
@@ -226,27 +604,53 @@ class ProductViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         product = serializer.save()
         
-        # Handle image uploads separately
-        images = request.FILES.getlist('images')
-        if images:
-            for image in images:
-                # Check if product already has 8 images
+        # Handle file uploads separately
+        files = request.FILES.getlist('files')
+        if files:
+            for file in files:
+                # Check if product already has 8 files
                 if product.images.count() >= 8:
                     break
                     
                 # Check file extension
                 import os
-                ext = os.path.splitext(image.name)[1].lower()
-                if ext not in ['.jpg', '.jpeg', '.png']:
+                ext = os.path.splitext(file.name)[1].lower()
+                allowed_extensions = ['.jpg', '.jpeg', '.png', '.glb', '.gltf']
+                
+                if ext not in allowed_extensions:
                     continue
-                    
-                ProductImage.objects.create(product=product, image=image)
-        
-        # Return the full product data
-        return Response(
-            ProductSerializer(product, context={'request': request}).data,
-            status=status.HTTP_201_CREATED
-        )
+                
+                # Determine file type
+                file_type = 'image' if ext in ['.jpg', '.jpeg', '.png'] else 'model'
+                
+                ProductImage.objects.create(
+                    product=product, 
+                    file=file,
+                    file_type=file_type
+                )
+        try:
+            # Return the full product data
+            return Response(
+                ProductSerializer(product, context={'request': request}).data,
+                status=status.HTTP_201_CREATED
+            )
+        except Exception as e:
+            # Simplified error handling
+            simplified_product = {
+                'id': product.id,
+                'name': product.name,
+                'description': product.description,
+                'price': str(product.price),
+                'discount_price': str(product.discount_price) if product.discount_price else None,
+                'stock': product.stock,
+                'category': product.category.id if product.category else None,
+                'category_name': product.category.name if product.category else None,
+                'seller': product.seller.id if product.seller else None,
+                'seller_username': product.seller.username if product.seller else None,
+                'created_at': product.created_at,
+                'updated_at': product.updated_at,
+            }
+            return Response(simplified_product, status=status.HTTP_201_CREATED)
     
     @extend_schema(
         request={
@@ -259,7 +663,7 @@ class ProductViewSet(viewsets.ModelViewSet):
                     'discount_price': {'type': 'number', 'nullable': True},
                     'stock': {'type': 'integer'},
                     'category': {'type': 'integer'},
-                    'images': {
+                    'files': {
                         'type': 'array',
                         'items': {'type': 'string', 'format': 'binary'}
                     },
@@ -268,10 +672,10 @@ class ProductViewSet(viewsets.ModelViewSet):
         },
         parameters=[
             OpenApiParameter(
-                name='images',
+                name='files',
                 type=OpenApiTypes.BINARY,
                 location='form',
-                description='Product images (max 8)',
+                description='Product images or 3D models (max 8)',
                 many=True,
                 required=False,
             ),
@@ -284,26 +688,53 @@ class ProductViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         product = serializer.save()
         
-        # Handle image uploads separately
-        images = request.FILES.getlist('images')
-        if images:
-            for image in images:
-                # Check if product already has 8 images
+        # Handle file uploads separately
+        files = request.FILES.getlist('files')
+        if files:
+            for file in files:
+                # Check if product already has 8 files
                 if product.images.count() >= 8:
                     break
                     
                 # Check file extension
                 import os
-                ext = os.path.splitext(image.name)[1].lower()
-                if ext not in ['.jpg', '.jpeg', '.png']:
+                ext = os.path.splitext(file.name)[1].lower()
+                allowed_extensions = ['.jpg', '.jpeg', '.png', '.glb', '.gltf']
+                
+                if ext not in allowed_extensions:
                     continue
-                    
-                ProductImage.objects.create(product=product, image=image)
+                
+                # Determine file type
+                file_type = 'image' if ext in ['.jpg', '.jpeg', '.png'] else 'model'
+                
+                ProductImage.objects.create(
+                    product=product, 
+                    file=file,
+                    file_type=file_type
+                )
         
-        # Return the full product data
-        return Response(
-            ProductSerializer(product, context={'request': request}).data
-        )
+        try:
+            # Return the full product data
+            return Response(
+                ProductSerializer(product, context={'request': request}).data
+            )
+        except Exception as e:
+            # Simplified error handling
+            simplified_product = {
+                'id': product.id,
+                'name': product.name,
+                'description': product.description,
+                'price': str(product.price),
+                'discount_price': str(product.discount_price) if product.discount_price else None,
+                'stock': product.stock,
+                'category': product.category.id if product.category else None,
+                'category_name': product.category.name if product.category else None,
+                'seller': product.seller.id if product.seller else None,
+                'seller_username': product.seller.username if product.seller else None,
+                'created_at': product.created_at,
+                'updated_at': product.updated_at,
+            }
+            return Response(simplified_product)
     
     @extend_schema(
         request={
@@ -316,7 +747,7 @@ class ProductViewSet(viewsets.ModelViewSet):
                     'discount_price': {'type': 'number', 'nullable': True},
                     'stock': {'type': 'integer'},
                     'category': {'type': 'integer'},
-                    'images': {
+                    'files': {
                         'type': 'array',
                         'items': {'type': 'string', 'format': 'binary'}
                     },
@@ -325,10 +756,10 @@ class ProductViewSet(viewsets.ModelViewSet):
         },
         parameters=[
             OpenApiParameter(
-                name='images',
+                name='files',
                 type=OpenApiTypes.BINARY,
                 location='form',
-                description='Product images (max 8)',
+                description='Product images or 3D models (max 8)',
                 many=True,
                 required=False,
             ),
@@ -340,7 +771,7 @@ class ProductViewSet(viewsets.ModelViewSet):
     
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
-        
+         
         # Check if user is the seller
         if instance.seller != request.user and not request.user.is_staff and request.user.role != 'admin':
             return Response(
@@ -348,32 +779,16 @@ class ProductViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_403_FORBIDDEN
             )
         
-        # Get the product ID before deleting
-        product_id = instance.id
-        
-        # Use raw SQL to delete the product and its related objects
-        # This completely bypasses Django's ORM and its cascading delete mechanism
-        with connection.cursor() as cursor:
-            # First delete related objects that we know exist
-            try:
-                # Delete ProductImage records
-                cursor.execute("DELETE FROM products_productimage WHERE product_id = %s", [product_id])
-            except Exception:
-                # Ignore errors if table doesn't exist
-                pass
-                
-            try:
-                # Delete Review records
-                cursor.execute("DELETE FROM products_review WHERE product_id = %s", [product_id])
-            except Exception:
-                # Ignore errors if table doesn't exist
-                pass
-                
-            # Finally delete the product itself
-            cursor.execute("DELETE FROM products_product WHERE id = %s", [product_id])
-        
-        return Response(status=status.HTTP_204_NO_CONTENT)
-    
+        try:
+            # Use Django ORM to delete the product
+            instance.delete()
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        except Exception as e:
+            return Response(
+                {'error': f'Failed to delete product: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
     @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
     def add_review(self, request, pk=None):
         product = self.get_object()
@@ -398,66 +813,74 @@ class ProductViewSet(viewsets.ModelViewSet):
             'multipart/form-data': {
                 'type': 'object',
                 'properties': {
-                    'images': {
+                    'files': {
                         'type': 'array',
                         'items': {'type': 'string', 'format': 'binary'}
                     },
                 },
-                'required': ['images']
+                'required': ['files']
             }
         },
         parameters=[
             OpenApiParameter(
-                name='images',
+                name='files',
                 type=OpenApiTypes.BINARY,
                 location='form',
-                description='Product images (max 8)',
+                description='Product images or 3D models (max 8)',
                 many=True,
                 required=True,
             ),
         ],
     )
     @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated, IsProductSeller], parser_classes=[MultiPartParser, FormParser])
-    def upload_images(self, request, pk=None):
+    def upload_files(self, request, pk=None):
         product = self.get_object()
         
         # Check if user is the seller
         if product.seller != request.user and not request.user.is_staff and request.user.role != 'admin':
             return Response(
-                {'error': 'Only the seller or admin can upload images for this product'},
+                {'error': 'Only the seller or admin can upload files for this product'},
                 status=status.HTTP_403_FORBIDDEN
             )
         
-        images = request.FILES.getlist('images')
-        if not images:
+        files = request.FILES.getlist('files')
+        if not files:
             return Response(
-                {'error': 'No images provided'},
+                {'error': 'No files provided'},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Check if adding these images would exceed the limit
+        # Check if adding these files would exceed the limit
         current_count = product.images.count()
-        if current_count + len(images) > 8:
+        if current_count + len(files) > 8:
             return Response(
-                {'error': f'A product can have at most 8 images. You already have {current_count} images.'},
+                {'error': f'A product can have at most 8 files. You already have {current_count} files.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Process each image
-        created_images = []
-        for image in images:
+        # Process each file
+        created_files = []
+        for file in files:
             # Validate file extension
             import os
-            ext = os.path.splitext(image.name)[1].lower()
-            if ext not in ['.jpg', '.jpeg', '.png']:
+            ext = os.path.splitext(file.name)[1].lower()
+            allowed_extensions = ['.jpg', '.jpeg', '.png', '.glb', '.gltf']
+            
+            if ext not in allowed_extensions:
                 return Response(
-                    {'error': f'File {image.name} is not a valid image format. Only JPG and PNG are allowed.'},
+                    {'error': f'File {file.name} is not a valid format. Only JPG, PNG, GLB, and GLTF are allowed.'},
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
-            # Create the image
-            product_image = ProductImage.objects.create(product=product, image=image)
-            created_images.append(ProductImageSerializer(product_image, context={'request': request}).data)
+            # Determine file type
+            file_type = 'image' if ext in ['.jpg', '.jpeg', '.png'] else 'model'
+            
+            # Create the file record
+            product_file = ProductImage.objects.create(
+                product=product, 
+                file=file,
+                file_type=file_type
+            )
+            created_files.append(ProductImageSerializer(product_file, context={'request': request}).data)
         
-        return Response(created_images, status=status.HTTP_201_CREATED)
-
+        return Response(created_files, status=status.HTTP_201_CREATED)

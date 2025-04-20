@@ -1,39 +1,54 @@
 from django.contrib import admin
-from .models import Product, Category, ProductImage, Review
+from .models import Category, Product, ProductImage, Review, ProductView
 
 class ProductImageInline(admin.TabularInline):
     model = ProductImage
     extra = 1
-    max_num = 8  # Limit to 8 images
-    fields = ['image']  # Removed is_primary field
 
 class ReviewInline(admin.TabularInline):
     model = Review
     extra = 0
     readonly_fields = ['user', 'rating', 'comment', 'created_at']
 
-@admin.register(Product)
 class ProductAdmin(admin.ModelAdmin):
-    list_display = ['name', 'price', 'discount_price', 'stock', 'category', 'seller']
-    list_filter = ['category', 'created_at']
+    list_display = ['name', 'price', 'discount_price', 'stock', 'category', 'seller', 'created_at']
+    list_filter = ['category', 'seller', 'created_at']
     search_fields = ['name', 'description']
     inlines = [ProductImageInline, ReviewInline]
+    
+    def get_queryset(self, request):
+        # Optimize queries with select_related
+        return super().get_queryset(request).select_related('category', 'seller')
 
-@admin.register(Category)
 class CategoryAdmin(admin.ModelAdmin):
-    list_display = ['name', 'parent']
-    search_fields = ['name']
+    list_display = ['name', 'parent', 'creator', 'created_at']
+    list_filter = ['parent', 'creator', 'created_at']
+    search_fields = ['name', 'description']
+    
+    def get_queryset(self, request):
+        # Optimize queries with select_related
+        return super().get_queryset(request).select_related('parent', 'creator')
 
-@admin.register(Review)
+class ProductViewAdmin(admin.ModelAdmin):
+    list_display = ['product', 'user', 'session_id', 'timestamp']
+    list_filter = ['product', 'timestamp']
+    readonly_fields = ['product', 'user', 'session_id', 'timestamp']
+    
+    def get_queryset(self, request):
+        # Optimize queries with select_related
+        return super().get_queryset(request).select_related('product', 'user')
+
 class ReviewAdmin(admin.ModelAdmin):
     list_display = ['product', 'user', 'rating', 'created_at']
-    list_filter = ['rating', 'created_at']
-    search_fields = ['comment']
-    readonly_fields = ['product', 'user']
+    list_filter = ['product', 'rating', 'created_at']
+    readonly_fields = ['created_at']
+    
+    def get_queryset(self, request):
+        # Optimize queries with select_related
+        return super().get_queryset(request).select_related('product', 'user')
 
-@admin.register(ProductImage)
-class ProductImageAdmin(admin.ModelAdmin):
-    list_display = ['product']  # Removed 'is_primary'
-    # Removed list_filter
-    search_fields = ['product__name']
-
+admin.site.register(Category, CategoryAdmin)
+admin.site.register(Product, ProductAdmin)
+admin.site.register(ProductImage)
+admin.site.register(Review, ReviewAdmin)
+admin.site.register(ProductView, ProductViewAdmin)
