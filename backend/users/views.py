@@ -5,7 +5,7 @@ from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiExample, OpenApiResponse
 from drf_spectacular.types import OpenApiTypes
-from django.db import transaction
+from django.db import transaction, connection
 from django.utils import timezone
 from .models import CustomUser
 from .serializers import CustomUserSerializer, LoginSerializer
@@ -130,12 +130,86 @@ class UserViewSet(viewsets.ModelViewSet):
             instance.set_password(password)
             instance.save()
     
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        
+        # Check permissions
+        if not request.user.is_staff and not request.user.role == 'admin' and request.user.id != instance.id:
+            return Response(
+                {'error': 'You do not have permission to delete this user'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        try:
+            # Use a direct SQL approach to delete the user
+            # This avoids ORM cascading which might try to access non-existent tables
+            with connection.cursor() as cursor:
+                # Get the user ID for use in queries
+                user_id = instance.id
+                
+                # List of tables to check and clean up before deleting the user
+                # We'll only delete from tables that actually exist
+                tables_to_check = [
+                    # Format: (table_name, column_name)
+                    ('carts_cart', 'customer_id'),
+                    ('products_product', 'seller_id'),
+                    ('products_category', 'creator_id'),
+                    ('products_review', 'user_id'),
+                    ('products_productview', 'user_id'),
+                    ('orders_order', 'user_id'),
+                    ('shipping_shippingmethod', 'creator_id'),
+                    ('shipping_shippingaddress', 'user_id'),
+                    ('analytics_useractivity', 'user_id'),  # Added this table
+                    # Add any other tables that might reference users
+                ]
+                
+                # Check each table and delete related records if the table exists
+                for table_name, column_name in tables_to_check:
+                    try:
+                        # Check if the table exists
+                        cursor.execute(f"""
+                            SELECT EXISTS (
+                                SELECT FROM information_schema.tables 
+                                WHERE table_name = %s
+                            );
+                        """, [table_name])
+                        table_exists = cursor.fetchone()[0]
+                        
+                        if table_exists:
+                            # Check if the column exists in the table
+                            cursor.execute(f"""
+                                SELECT EXISTS (
+                                    SELECT FROM information_schema.columns 
+                                    WHERE table_name = %s AND column_name = %s
+                                );
+                            """, [table_name, column_name])
+                            column_exists = cursor.fetchone()[0]
+                            
+                            if column_exists:
+                                # Delete records where the user is referenced
+                                cursor.execute(f"""
+                                    DELETE FROM "{table_name}" 
+                                    WHERE "{column_name}" = %s
+                                """, [user_id])
+                    except Exception as e:
+                        # Log the error but continue with other tables
+                        print(f"Error handling {table_name}: {str(e)}")
+                
+                # Finally, delete the user
+                cursor.execute('DELETE FROM "users_customuser" WHERE "id" = %s', [user_id])
+                
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        except Exception as e:
+            return Response(
+                {'error': f'Failed to delete user: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
     @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
     def me(self, request):
         """Get the current user's profile"""
         serializer = self.get_serializer(request.user)
         return Response(serializer.data)
-    
     
     @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated, IsAdmin])
     def active(self, request):

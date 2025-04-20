@@ -7,7 +7,7 @@ from rest_framework.response import Response
 from rest_framework.parsers import JSONParser, MultiPartParser, FormParser
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiExample, OpenApiResponse
 from drf_spectacular.types import OpenApiTypes
-from django.db import transaction
+from django.db import transaction, connection
 from django.db.models import Q
 
 from .models import Product, ProductView, Review, ProductImage, Category
@@ -390,14 +390,25 @@ class ProductViewSet(viewsets.ModelViewSet):
             instance = self.get_object()
             # Track view - simplified
             try:
-                if request.user.is_authenticated:
-                    ProductView.objects.create(product=instance, user=request.user)
-                else:
-                    session_id = request.session.get('session_id')
-                    if not session_id:
-                        session_id = str(uuid.uuid4())
-                        request.session['session_id'] = session_id
-                    ProductView.objects.create(product=instance, session_id=session_id)
+                # Check if ProductView model exists in the database
+                with connection.cursor() as cursor:
+                    cursor.execute("""
+                        SELECT EXISTS (
+                            SELECT FROM information_schema.tables 
+                            WHERE table_name = 'products_productview'
+                        );
+                    """)
+                    table_exists = cursor.fetchone()[0]
+                
+                if table_exists:
+                    if request.user.is_authenticated:
+                        ProductView.objects.create(product=instance, user=request.user)
+                    else:
+                        session_id = request.session.get('session_id')
+                        if not session_id:
+                            session_id = str(uuid.uuid4())
+                            request.session['session_id'] = session_id
+                        ProductView.objects.create(product=instance, session_id=session_id)
             except Exception:
                 # Don't let view tracking failure affect the API response
                 pass
@@ -780,15 +791,66 @@ class ProductViewSet(viewsets.ModelViewSet):
             )
         
         try:
-            # Use Django ORM to delete the product
-            instance.delete()
+            # Use a direct SQL approach to delete the product
+            # This avoids ORM cascading which might try to access non-existent tables
+            with connection.cursor() as cursor:
+                # Get the product ID for use in queries
+                product_id = instance.id
+                
+                # List of tables to check and clean up before deleting the product
+                # We'll only delete from tables that actually exist
+                tables_to_check = [
+                    # Format: (table_name, column_name)
+                    ('products_productview', 'product_id'),
+                    ('products_review', 'product_id'),
+                    ('products_productimage', 'product_id'),
+                    ('carts_cartitem', 'product_id'),
+                    ('orders_orderitem', 'product_id'),
+                    # Add any other tables that might reference products
+                ]
+                
+                # Check each table and delete related records if the table exists
+                for table_name, column_name in tables_to_check:
+                    try:
+                        # Check if the table exists
+                        cursor.execute(f"""
+                            SELECT EXISTS (
+                                SELECT FROM information_schema.tables 
+                                WHERE table_name = %s
+                            );
+                        """, [table_name])
+                        table_exists = cursor.fetchone()[0]
+                        
+                        if table_exists:
+                            # Check if the column exists in the table
+                            cursor.execute(f"""
+                                SELECT EXISTS (
+                                    SELECT FROM information_schema.columns 
+                                    WHERE table_name = %s AND column_name = %s
+                                );
+                            """, [table_name, column_name])
+                            column_exists = cursor.fetchone()[0]
+                            
+                            if column_exists:
+                                # Delete records where the product is referenced
+                                cursor.execute(f"""
+                                    DELETE FROM "{table_name}" 
+                                    WHERE "{column_name}" = %s
+                                """, [product_id])
+                    except Exception as e:
+                        # Log the error but continue with other tables
+                        print(f"Error handling {table_name}: {str(e)}")
+                
+                # Finally, delete the product
+                cursor.execute('DELETE FROM "products_product" WHERE "id" = %s', [product_id])
+                
             return Response(status=status.HTTP_204_NO_CONTENT)
         except Exception as e:
             return Response(
                 {'error': f'Failed to delete product: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
-
+    
     @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
     def add_review(self, request, pk=None):
         product = self.get_object()
