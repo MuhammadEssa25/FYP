@@ -7,7 +7,30 @@ from django.db.models.functions import TruncDay
 from datetime import timedelta
 from django.utils import timezone
 from permissions import IsSellerOrAdmin
+from rest_framework import serializers
+from drf_spectacular.utils import extend_schema
 
+# Create a serializer for the dashboard stats
+class DayViewsSerializer(serializers.Serializer):
+    day = serializers.DateTimeField()
+    count = serializers.IntegerField()
+
+class ProductStatsSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    name = serializers.CharField()
+    view_count = serializers.IntegerField()
+
+class CategoryStatsSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    name = serializers.CharField()
+    product_count = serializers.IntegerField()
+
+class DashboardStatsSerializer(serializers.Serializer):
+    views_by_day = DayViewsSerializer(many=True)
+    top_products = ProductStatsSerializer(many=True)
+    top_categories = CategoryStatsSerializer(many=True)
+
+@extend_schema(responses=DashboardStatsSerializer)
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, IsSellerOrAdmin])
 def dashboard_stats(request):
@@ -84,4 +107,3 @@ def dashboard_stats(request):
         'top_products': list(top_products),
         'top_categories': list(top_categories),
     })
-

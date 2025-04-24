@@ -28,12 +28,15 @@ INSTALLED_APPS = [
     'drf_spectacular',
     
     # Local apps - order matters for dependencies
+    'core.apps.CoreConfig',  # Add this line to ensure our app config is loaded
     'users',  # First because other apps depend on it
     'products',  # Second because carts and orders depend on it
     'carts',  # Third because orders depend on it
     'shipping',  # Depends on users and products
     'orders',  # Depends on users, products, and carts
     'analytics',  # Last because it might depend on other apps
+    'payments',
+    'qna',
 ]
 
 MIDDLEWARE = [
@@ -124,6 +127,9 @@ SIMPLE_JWT = {
     'REFRESH_TOKEN_LIFETIME': timedelta(days=1),
 }
 
+# Import enum overrides without importing models
+from core.schema import ENUM_NAME_OVERRIDES
+
 SPECTACULAR_SETTINGS = {
     'TITLE': 'E-Commerce API',
     'DESCRIPTION': 'API for E-Commerce platform',
@@ -146,6 +152,7 @@ SPECTACULAR_SETTINGS = {
         }
     },
     'SECURITY': [{'Bearer': []}],
+    'ENUM_NAME_OVERRIDES': ENUM_NAME_OVERRIDES,
 }
 
 SITE_ID = 1

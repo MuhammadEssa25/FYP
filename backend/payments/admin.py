@@ -7,4 +7,3 @@ class PaymentAdmin(admin.ModelAdmin):
     list_filter = ['status', 'payment_method', 'created_at']
     search_fields = ['order__id', 'transaction_id']
     readonly_fields = ['created_at', 'updated_at']
-

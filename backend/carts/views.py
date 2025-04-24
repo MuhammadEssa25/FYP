@@ -5,7 +5,7 @@ from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
 from .models import Cart, CartItem
 from .serializers import CartSerializer, CartItemSerializer
-from products.models import Product
+from products.models import Product, ProductVariant
 from shipping.models import ShippingMethod
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiExample
 from drf_spectacular.types import OpenApiTypes
@@ -79,6 +79,13 @@ class CartViewSet(viewsets.GenericViewSet):
                 location=OpenApiParameter.QUERY
             ),
             OpenApiParameter(
+                name='variant_id',
+                description='Product Variant ID (optional)',
+                required=False,
+                type=int,
+                location=OpenApiParameter.QUERY
+            ),
+            OpenApiParameter(
                 name='quantity',
                 description='Quantity to add (default: 1)',
                 required=False,
@@ -91,6 +98,7 @@ class CartViewSet(viewsets.GenericViewSet):
                 'Example Request',
                 value={
                     'product_id': 1,
+                    'variant_id': 2,
                     'quantity': 2
                 },
                 request_only=True,
@@ -105,9 +113,11 @@ class CartViewSet(viewsets.GenericViewSet):
             # Get or create the cart
             cart, created = Cart.objects.get_or_create(customer=request.user)
             
-            # Get product and quantity from request
+            # Get product, variant, and quantity from request
             # Check both query parameters and request body
             product_id = request.query_params.get('product_id') or request.data.get('product_id')
+            variant_id = request.query_params.get('variant_id') or request.data.get('variant_id')
+            
             if not product_id:
                 return Response({"error": "Product ID is required"}, status=status.HTTP_400_BAD_REQUEST)
             
@@ -124,34 +134,59 @@ class CartViewSet(viewsets.GenericViewSet):
             except Product.DoesNotExist:
                 return Response({"error": f"Product with ID {product_id} does not exist"}, status=status.HTTP_404_NOT_FOUND)
             
-            # Check if product is in stock
-            if product.stock < quantity:
-                return Response(
-                    {"error": f"Not enough stock. Only {product.stock} available."},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
+            # Get the variant if specified
+            variant = None
+            if variant_id:
+                try:
+                    variant = ProductVariant.objects.get(id=variant_id, product=product)
+                except ProductVariant.DoesNotExist:
+                    return Response(
+                        {"error": f"Variant with ID {variant_id} does not exist for this product"},
+                        status=status.HTTP_404_NOT_FOUND
+                    )
+                
+                # Check if variant is in stock
+                if variant.stock < quantity:
+                    return Response(
+                        {"error": f"Not enough stock for this variant. Only {variant.stock} available."},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+            else:
+                # Check if product is in stock
+                if product.stock < quantity:
+                    return Response(
+                        {"error": f"Not enough stock. Only {product.stock} available."},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
             
             # Check if item already exists in cart
             try:
-                cart_item = CartItem.objects.get(cart=cart, product=product)
+                cart_item = CartItem.objects.get(cart=cart, product=product, variant=variant)
                 # Update quantity 
                 cart_item.quantity += quantity
                 # Validate stock again
-                if product.stock < cart_item.quantity:
+                if variant:
+                    if variant.stock < cart_item.quantity:
+                        return Response(
+                            {"error": f"Not enough stock for this variant. Only {variant.stock} available."},
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
+                elif product.stock < cart_item.quantity:
                     return Response(
                         {"error": f"Not enough stock. Only {product.stock} available."},
                         status=status.HTTP_400_BAD_REQUEST
                     )
                 cart_item.save()
-                logger.info(f"Updated cart item: {cart_item.id}, product: {product.id}, quantity: {cart_item.quantity}")
+                logger.info(f"Updated cart item: {cart_item.id}, product: {product.id}, variant: {variant.id if variant else None}, quantity: {cart_item.quantity}")
             except CartItem.DoesNotExist:
                 # Create new cart item
                 cart_item = CartItem.objects.create(
                     cart=cart,
                     product=product,
+                    variant=variant,
                     quantity=quantity
                 )
-                logger.info(f"Created new cart item: {cart_item.id}, product: {product.id}, quantity: {quantity}")
+                logger.info(f"Created new cart item: {cart_item.id}, product: {product.id}, variant: {variant.id if variant else None}, quantity: {quantity}")
             
             
             # Return updated cart
@@ -218,7 +253,13 @@ class CartViewSet(viewsets.GenericViewSet):
                 return Response({"error": f"Cart item with ID {item_id} does not exist"}, status=status.HTTP_404_NOT_FOUND)
             
             # Check if product is in stock
-            if cart_item.product.stock < quantity:
+            if cart_item.variant:
+                if cart_item.variant.stock < quantity:
+                    return Response(
+                        {"error": f"Not enough stock for this variant. Only {cart_item.variant.stock} available."},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+            elif cart_item.product.stock < quantity:
                 return Response(
                     {"error": f"Not enough stock. Only {cart_item.product.stock} available."},
                     status=status.HTTP_400_BAD_REQUEST

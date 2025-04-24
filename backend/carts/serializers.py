@@ -1,26 +1,37 @@
-# cart/serializers.py
 from rest_framework import serializers
 from .models import Cart, CartItem
 from collections import defaultdict
 from decimal import Decimal
+from typing import Dict, Any, Optional, List, Union
+from drf_spectacular.utils import extend_schema_field
+from drf_spectacular.types import OpenApiTypes
 
 # Import ProductSerializer directly
-from products.serializers import ProductSerializer
+from products.serializers import ProductSerializer, ProductVariantSerializer
 
 class CartItemSerializer(serializers.ModelSerializer):
     product_details = serializers.SerializerMethodField()
+    variant_details = serializers.SerializerMethodField()
     subtotal = serializers.SerializerMethodField()
     
     class Meta:
         model = CartItem
-        fields = ['id', 'product', 'product_details', 'quantity', 'subtotal', 'added_at']
+        fields = ['id', 'product', 'product_details', 'variant', 'variant_details', 'quantity', 'subtotal', 'added_at']
         read_only_fields = ['added_at', 'subtotal']
     
-    def get_product_details(self, obj):
+    @extend_schema_field(OpenApiTypes.OBJECT)
+    def get_product_details(self, obj) -> Dict[str, Any]:
         # Use the imported ProductSerializer directly
         return ProductSerializer(obj.product).data
     
-    def get_subtotal(self, obj):
+    @extend_schema_field(OpenApiTypes.OBJECT)
+    def get_variant_details(self, obj) -> Optional[Dict[str, Any]]:
+        if obj.variant:
+            return ProductVariantSerializer(obj.variant).data
+        return None
+    
+    @extend_schema_field(OpenApiTypes.NUMBER)
+    def get_subtotal(self, obj) -> float:
         return obj.subtotal
     
     def validate_product(self, value):
@@ -38,14 +49,21 @@ class CartItemSerializer(serializers.ModelSerializer):
     def validate(self, data):
         """Validate that the requested quantity is available"""
         product = data.get('product')
+        variant = data.get('variant')
         quantity = data.get('quantity', 1)
         
         # If we're updating an existing cart item, we need to check the current quantity
         if self.instance:
-            if product.stock < quantity:
+            if variant:
+                if variant.stock < quantity:
+                    raise serializers.ValidationError(f"Not enough stock for this variant. Only {variant.stock} available.")
+            elif product.stock < quantity:
                 raise serializers.ValidationError(f"Not enough stock. Only {product.stock} available.")
         else:
-            if product.stock < quantity:
+            if variant:
+                if variant.stock < quantity:
+                    raise serializers.ValidationError(f"Not enough stock for this variant. Only {variant.stock} available.")
+            elif product.stock < quantity:
                 raise serializers.ValidationError(f"Not enough stock. Only {product.stock} available.")
         
         return data
@@ -61,13 +79,16 @@ class CartSerializer(serializers.ModelSerializer):
         fields = ['id', 'customer', 'items', 'total_amount', 'item_count', 'shipping_info', 'created_at', 'updated_at']
         read_only_fields = ['customer', 'created_at', 'updated_at']
     
-    def get_total_amount(self, obj):
+    @extend_schema_field(OpenApiTypes.NUMBER)
+    def get_total_amount(self, obj) -> float:
         return obj.total_amount
     
-    def get_item_count(self, obj):
+    @extend_schema_field(OpenApiTypes.INT)
+    def get_item_count(self, obj) -> int:
         return obj.item_count
     
-    def get_shipping_info(self, obj):
+    @extend_schema_field(OpenApiTypes.OBJECT)
+    def get_shipping_info(self, obj) -> Dict[str, Any]:
         """Calculate shipping information for the cart"""
         # Group cart items by seller
         seller_items = defaultdict(list)

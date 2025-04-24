@@ -1,7 +1,9 @@
 from django.db import models
-from django.utils import timezone
 from django.conf import settings
-import uuid
+from django.utils import timezone
+
+from products.models import Product, ProductVariant
+
 
 class Order(models.Model):
     STATUS_CHOICES = (
@@ -11,58 +13,60 @@ class Order(models.Model):
         ('delivered', 'Delivered'),
         ('cancelled', 'Cancelled'),
     )
-    customer = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='orders')
-    created_at = models.DateTimeField(default=timezone.now)
-    updated_at = models.DateTimeField(auto_now=True)
+    
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='orders')
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
-    subtotal_amount = models.DecimalField(max_digits=10, decimal_places=2)
-    shipping_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
-    total_amount = models.DecimalField(max_digits=10, decimal_places=2)
-    shipping_address = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    shipping_address = models.TextField()
+    billing_address = models.TextField()
+    payment_method = models.CharField(max_length=50)
+    payment_status = models.CharField(max_length=20, default='pending')
+    total_price = models.DecimalField(max_digits=10, decimal_places=2)
     tracking_number = models.CharField(max_length=100, blank=True, null=True)
     notes = models.TextField(blank=True, null=True)
     
+    # Fields for cancellation tracking
+    cancelled_at = models.DateTimeField(blank=True, null=True)
+    cancelled_by = models.IntegerField(blank=True, null=True)  # User ID who cancelled
+    cancelled_by_role = models.CharField(max_length=20, blank=True, null=True)  # Role of user who cancelled
+    cancellation_reason = models.TextField(blank=True, null=True)  # Reason for cancellation
+    
     def __str__(self):
-        return f"Order {self.id} by {self.customer.username}"
+        return f"Order {self.id} - {self.user.username}"
     
     def save(self, *args, **kwargs):
-        # Ensure total_amount is always subtotal + shipping
-        if self.subtotal_amount is not None and self.shipping_amount is not None:
-            self.total_amount = self.subtotal_amount + self.shipping_amount
+        # If status is changed to cancelled and cancelled_at is not set, set it now
+        if self.status == 'cancelled' and not self.cancelled_at:
+            self.cancelled_at = timezone.now()
+        
         super().save(*args, **kwargs)
 
+
+class OrderStatusHistory(models.Model):
+    """
+    Model to track order status changes
+    """
+    order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name='status_history')
+    status = models.CharField(max_length=20, choices=Order.STATUS_CHOICES)
+    timestamp = models.DateTimeField(auto_now_add=True)
+    updated_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True)
+    notes = models.TextField(blank=True, null=True)
+    
+    class Meta:
+        ordering = ['-timestamp']
+    
+    def __str__(self):
+        return f"Order {self.order.id} - {self.status} at {self.timestamp}"
+
+
 class OrderItem(models.Model):
-    order = models.ForeignKey(Order, related_name='items', on_delete=models.CASCADE)
-    product = models.ForeignKey('products.Product', on_delete=models.CASCADE)
+    order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name='items')
+    product = models.ForeignKey(Product, on_delete=models.CASCADE)
+    variant = models.ForeignKey(ProductVariant, on_delete=models.SET_NULL, null=True, blank=True)
     quantity = models.PositiveIntegerField(default=1)
-    price = models.DecimalField(max_digits=10, decimal_places=2)
+    price = models.DecimalField(max_digits=10, decimal_places=2)  # Price at time of purchase
     
     def __str__(self):
-        return f"{self.quantity} x {self.product.name} in Order {self.order.id}"
-    
-    @property
-    def subtotal(self):
-        return self.price * self.quantity
-
-class Payment(models.Model):
-    PAYMENT_METHOD_CHOICES = (
-        ('credit_card', 'Credit Card'),
-        ('paypal', 'PayPal'),
-        ('bank_transfer', 'Bank Transfer'),
-    )
-    PAYMENT_STATUS_CHOICES = (
-        ('pending', 'Pending'),
-        ('completed', 'Completed'),
-        ('failed', 'Failed'),
-    )
-    
-    order = models.OneToOneField(Order, on_delete=models.CASCADE, related_name='payment')
-    amount = models.DecimalField(max_digits=10, decimal_places=2)
-    payment_method = models.CharField(max_length=20, choices=PAYMENT_METHOD_CHOICES)
-    transaction_id = models.CharField(max_length=100, unique=True, default=uuid.uuid4)
-    status = models.CharField(max_length=20, choices=PAYMENT_STATUS_CHOICES, default='pending')
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    def __str__(self):
-        return f"Payment for Order {self.order.id}"
+        variant_info = f" - {self.variant.sku}" if self.variant else ""
+        return f"{self.product.name}{variant_info} x {self.quantity}"

@@ -19,8 +19,10 @@ urlpatterns = [
     path('api/products/', include('products.urls')),
     path('api/orders/', include('orders.urls')),
     path('api/analytics/', include('analytics.urls')),
+    path('api/payments/', include('payments.urls')),
     path('api/cart/', include('carts.urls')),
-    path('api/shipping/', include('shipping.urls')),  # Add this line
+    path('api/shipping/', include('shipping.urls')),
+    path('api/qna/', include('qna.urls')),
 ]
 
 # Serve media files in development

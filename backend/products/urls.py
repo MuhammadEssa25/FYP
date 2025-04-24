@@ -1,12 +1,14 @@
 from django.urls import path
-from .views import ProductViewSet, CategoryViewSet
+from .views import (
+    ProductViewSet, CategoryViewSet, ProductVariantTypeViewSet, 
+    ProductVariantOptionViewSet, ProductVariantViewSet
+)
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 
 # Define URL patterns explicitly
 urlpatterns = [
-
     # Product routes
     path('', ProductViewSet.as_view({
         'get': 'list',
@@ -68,4 +70,55 @@ urlpatterns = [
     path('<int:pk>/upload-files/', ProductViewSet.as_view({
         'post': 'upload_files'
     }), name='product-upload-files'),
+    
+    path('<int:pk>/add-variant/', ProductViewSet.as_view({
+        'post': 'add_variant'
+    }), name='product-add-variant'),
+    
+    # Variant type routes
+    path('variant-types/', ProductVariantTypeViewSet.as_view({
+        'get': 'list',
+        'post': 'create'
+    }), name='variant-type-list'),
+    
+    path('variant-types/<int:pk>/', ProductVariantTypeViewSet.as_view({
+        'get': 'retrieve',
+        'put': 'update',
+        'patch': 'partial_update',
+        'delete': 'destroy'
+    }), name='variant-type-detail'),
+    
+    # Variant option routes
+    path('variant-options/', ProductVariantOptionViewSet.as_view({
+        'get': 'list',
+        'post': 'create'
+    }), name='variant-option-list'),
+    
+    path('variant-options/<int:pk>/', ProductVariantOptionViewSet.as_view({
+        'get': 'retrieve',
+        'put': 'update',
+        'patch': 'partial_update',
+        'delete': 'destroy'
+    }), name='variant-option-detail'),
+    
+    path('variant-options/by-variant-type/', ProductVariantOptionViewSet.as_view({
+        'get': 'by_variant_type'
+    }), name='variant-options-by-type'),
+    
+    # Product variant routes
+    path('variants/', ProductVariantViewSet.as_view({
+        'get': 'list',
+        'post': 'create'
+    }), name='variant-list'),
+    
+    path('variants/<int:pk>/', ProductVariantViewSet.as_view({
+        'get': 'retrieve',
+        'put': 'update',
+        'patch': 'partial_update',
+        'delete': 'destroy'
+    }), name='variant-detail'),
+    
+    path('variants/by-product/', ProductVariantViewSet.as_view({
+        'get': 'by_product'
+    }), name='variants-by-product'),
 ]

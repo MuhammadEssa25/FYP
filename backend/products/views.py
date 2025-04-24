@@ -1,6 +1,6 @@
 import uuid
 
-from rest_framework import viewsets, status
+from rest_framework import viewsets, status, permissions
 from rest_framework.decorators import action, parser_classes
 from rest_framework.permissions import IsAuthenticatedOrReadOnly, IsAuthenticated, AllowAny
 from rest_framework.response import Response
@@ -10,9 +10,171 @@ from drf_spectacular.types import OpenApiTypes
 from django.db import transaction, connection
 from django.db.models import Q
 
-from .models import Product, ProductView, Review, ProductImage, Category
-from .serializers import ProductSerializer, ProductCreateUpdateSerializer, ReviewSerializer, ProductImageSerializer, CategorySerializer
+from .models import (
+    Product, ProductView, Review, ProductImage, Category, 
+    ProductVariantType, ProductVariantOption, ProductVariant,
+    Wishlist, WishlistItem
+)
+from .serializers import (
+    ProductSerializer, ProductCreateUpdateSerializer, ReviewSerializer, 
+    ProductImageSerializer, CategorySerializer, ProductVariantTypeSerializer, 
+    ProductVariantOptionSerializer, ProductVariantSerializer,
+    WishlistSerializer, WishlistItemSerializer
+)
 from permissions import IsSellerOrAdmin, IsProductSeller
+
+
+class WishlistViewSet(viewsets.ModelViewSet):
+    """
+    API endpoint for managing user wishlists
+    """
+    serializer_class = WishlistSerializer
+    permission_classes = [IsAuthenticated]
+    
+    def get_queryset(self):
+        """
+        Return the wishlist for the current user
+        """
+        user = self.request.user
+        return Wishlist.objects.filter(user=user)
+    
+    def perform_create(self, serializer):
+        """
+        Create a new wishlist for the current user
+        """
+        serializer.save(user=self.request.user)
+    
+    @extend_schema(
+        description="Get or create the current user's wishlist",
+        responses={200: WishlistSerializer}
+    )
+    @action(detail=False, methods=['get'])
+    def my_wishlist(self, request):
+        """
+        Get or create the current user's wishlist
+        """
+        wishlist, created = Wishlist.objects.get_or_create(user=request.user)
+        serializer = self.get_serializer(wishlist)
+        return Response(serializer.data)
+    
+    @extend_schema(
+        description="Add a product to the wishlist",
+        request={
+            'application/json': {
+                'type': 'object',
+                'properties': {
+                    'product_id': {'type': 'integer'},
+                    'variant_id': {'type': 'integer', 'nullable': True},
+                    'notes': {'type': 'string', 'nullable': True}
+                },
+                'required': ['product_id']
+            }
+        }
+    )
+    @action(detail=False, methods=['post'])
+    def add_item(self, request):
+        """
+        Add a product to the wishlist
+        """
+        wishlist, created = Wishlist.objects.get_or_create(user=request.user)
+        
+        product_id = request.data.get('product_id')
+        variant_id = request.data.get('variant_id', None)
+        notes = request.data.get('notes', None)
+        
+        try:
+            product = Product.objects.get(id=product_id)
+            
+            # Create or update the wishlist item
+            wishlist_item, created = WishlistItem.objects.get_or_create(
+                wishlist=wishlist,
+                product=product,
+                variant_id=variant_id,
+                defaults={'notes': notes}
+            )
+            
+            if not created and notes is not None:
+                wishlist_item.notes = notes
+                wishlist_item.save()
+            
+            return Response({'status': 'Product added to wishlist'}, status=status.HTTP_200_OK)
+        except Product.DoesNotExist:
+            return Response({'error': 'Product not found'}, status=status.HTTP_404_NOT_FOUND)
+    
+    @extend_schema(
+        description="Remove a product from the wishlist",
+        request={
+            'application/json': {
+                'type': 'object',
+                'properties': {
+                    'product_id': {'type': 'integer'},
+                    'variant_id': {'type': 'integer', 'nullable': True}
+                },
+                'required': ['product_id']
+            }
+        }
+    )
+    @action(detail=False, methods=['post'])
+    def remove_item(self, request):
+        """
+        Remove a product from the wishlist
+        """
+        wishlist, created = Wishlist.objects.get_or_create(user=request.user)
+        
+        product_id = request.data.get('product_id')
+        variant_id = request.data.get('variant_id', None)
+        
+        try:
+            product = Product.objects.get(id=product_id)
+            
+            # Delete the wishlist item
+            if variant_id:
+                WishlistItem.objects.filter(
+                    wishlist=wishlist, 
+                    product=product,
+                    variant_id=variant_id
+                ).delete()
+            else:
+                WishlistItem.objects.filter(
+                    wishlist=wishlist, 
+                    product=product
+                ).delete()
+            
+            return Response({'status': 'Product removed from wishlist'}, status=status.HTTP_200_OK)
+        except Product.DoesNotExist:
+            return Response({'error': 'Product not found'}, status=status.HTTP_404_NOT_FOUND)
+    
+    @extend_schema(
+        description="Check if a product is in the wishlist",
+        parameters=[
+            OpenApiParameter(
+                name='product_id',
+                description='Product ID',
+                required=True,
+                type=int,
+                location=OpenApiParameter.QUERY
+            ),
+        ],
+    )
+    @action(detail=False, methods=['get'])
+    def check_product(self, request):
+        """
+        Check if a product is in the wishlist
+        """
+        wishlist, created = Wishlist.objects.get_or_create(user=request.user)
+        
+        product_id = request.query_params.get('product_id')
+        
+        try:
+            product = Product.objects.get(id=product_id)
+            is_in_wishlist = WishlistItem.objects.filter(
+                wishlist=wishlist, 
+                product=product
+            ).exists()
+            
+            return Response({'in_wishlist': is_in_wishlist}, status=status.HTTP_200_OK)
+        except Product.DoesNotExist:
+            return Response({'error': 'Product not found'}, status=status.HTTP_404_NOT_FOUND)
 
 
 class CategoryViewSet(viewsets.ModelViewSet):
@@ -316,6 +478,12 @@ class CategoryViewSet(viewsets.ModelViewSet):
                         'seller_username': product.seller.username if product.seller else None,
                         'created_at': product.created_at,
                         'updated_at': product.updated_at,
+                        'weight': product.weight,
+                        'length': product.length,
+                        'width': product.width,
+                        'height': product.height,
+                        'is_active': product.is_active,
+                        'status': product.status
                     })
                 except Exception:
                     continue
@@ -323,11 +491,101 @@ class CategoryViewSet(viewsets.ModelViewSet):
             return Response(simplified_products)
 
 
+class ProductVariantTypeViewSet(viewsets.ModelViewSet):
+    """
+    API endpoint for managing product variant types (e.g., Size, Color)
+    """
+    queryset = ProductVariantType.objects.all()
+    serializer_class = ProductVariantTypeSerializer
+    permission_classes = [IsAuthenticated, IsSellerOrAdmin]
+    
+    def get_queryset(self):
+        return ProductVariantType.objects.all()
+
+
+class ProductVariantOptionViewSet(viewsets.ModelViewSet):
+    """
+    API endpoint for managing product variant options (e.g., Small, Red)
+    """
+    queryset = ProductVariantOption.objects.all()
+    serializer_class = ProductVariantOptionSerializer
+    permission_classes = [IsAuthenticated, IsSellerOrAdmin]
+    
+    def get_queryset(self):
+        return ProductVariantOption.objects.all()
+    
+    @extend_schema(
+        description="Get options for a specific variant type",
+        parameters=[
+            OpenApiParameter(
+                name='variant_type_id',
+                description='Variant Type ID',
+                required=True,
+                type=int,
+                location=OpenApiParameter.QUERY
+            ),
+        ],
+    )
+    @action(detail=False, methods=['get'])
+    def by_variant_type(self, request):
+        """Get options for a specific variant type"""
+        variant_type_id = request.query_params.get('variant_type_id')
+        if not variant_type_id:
+            return Response(
+                {"error": "variant_type_id parameter is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        options = ProductVariantOption.objects.filter(variant_type_id=variant_type_id)
+        serializer = self.get_serializer(options, many=True)
+        return Response(serializer.data)
+
+
+class ProductVariantViewSet(viewsets.ModelViewSet):
+    """
+    API endpoint for managing product variants
+    """
+    queryset = ProductVariant.objects.all()
+    serializer_class = ProductVariantSerializer
+    permission_classes = [IsAuthenticated, IsSellerOrAdmin]
+    
+    def get_queryset(self):
+        if self.request.user.is_staff or self.request.user.role == 'admin':
+            return ProductVariant.objects.all()
+        return ProductVariant.objects.filter(product__seller=self.request.user)
+    
+    @extend_schema(
+        description="Get variants for a specific product",
+        parameters=[
+            OpenApiParameter(
+                name='product_id',
+                description='Product ID',
+                required=True,
+                type=int,
+                location=OpenApiParameter.QUERY
+            ),
+        ],
+    )
+    @action(detail=False, methods=['get'])
+    def by_product(self, request):
+        """Get variants for a specific product"""
+        product_id = request.query_params.get('product_id')
+        if not product_id:
+            return Response(
+                {"error": "product_id parameter is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        variants = ProductVariant.objects.filter(product_id=product_id)
+        serializer = self.get_serializer(variants, many=True)
+        return Response(serializer.data)
+
+
 class ProductViewSet(viewsets.ModelViewSet):
     queryset = Product.objects.all()
     serializer_class = ProductSerializer
     parser_classes = [JSONParser, MultiPartParser, FormParser]
-    
+      
     def get_serializer_class(self):
         if self.action in ['create', 'update', 'partial_update']:
             return ProductCreateUpdateSerializer
@@ -335,7 +593,20 @@ class ProductViewSet(viewsets.ModelViewSet):
     
     def get_queryset(self):
         # Optimize queries with select_related
-        return Product.objects.select_related('category', 'seller')
+        queryset = Product.objects.select_related('category', 'seller')
+        
+        # Filter by status if provided
+        status_param = self.request.query_params.get('status', None)
+        if status_param:
+            queryset = queryset.filter(status=status_param)
+        
+        # Filter by is_active if provided
+        is_active = self.request.query_params.get('is_active', None)
+        if is_active is not None:
+            is_active_bool = is_active.lower() == 'true'
+            queryset = queryset.filter(is_active=is_active_bool)
+            
+        return queryset
     
     def get_permissions(self):
         if self.action == 'list' or self.action == 'retrieve':
@@ -379,6 +650,12 @@ class ProductViewSet(viewsets.ModelViewSet):
                         'seller_username': product.seller.username if product.seller else None,
                         'created_at': product.created_at,
                         'updated_at': product.updated_at,
+                        'weight': product.weight,
+                        'length': product.length,
+                        'width': product.width,
+                        'height': product.height,
+                        'is_active': product.is_active,
+                        'status': product.status
                     })
                 except Exception:
                     continue
@@ -431,6 +708,12 @@ class ProductViewSet(viewsets.ModelViewSet):
                 'seller_username': instance.seller.username if instance.seller else None,
                 'created_at': instance.created_at,
                 'updated_at': instance.updated_at,
+                'weight': instance.weight,
+                'length': instance.length,
+                'width': instance.width,
+                'height': instance.height,
+                'is_active': instance.is_active,
+                'status': instance.status
             }
             return Response(simplified_product)
     
@@ -483,6 +766,12 @@ class ProductViewSet(viewsets.ModelViewSet):
                         'seller_username': product.seller.username if product.seller else None,
                         'created_at': product.created_at,
                         'updated_at': product.updated_at,
+                        'weight': product.weight,
+                        'length': product.length,
+                        'width': product.width,
+                        'height': product.height,
+                        'is_active': product.is_active,
+                        'status': product.status
                     })
                 except Exception:
                     continue
@@ -512,7 +801,7 @@ class ProductViewSet(viewsets.ModelViewSet):
         
         # Get all images for these products
         images = ProductImage.objects.filter(product__in=products)
-        
+         
         try:
             # Paginate results
             page = self.paginate_queryset(images)
@@ -531,6 +820,7 @@ class ProductViewSet(viewsets.ModelViewSet):
                     simplified_images.append({
                         'id': image.id,
                         'product': image.product.id,
+                        'variant': image.variant.id if image.variant else None,
                         'file': request.build_absolute_uri(image.file.url) if image.file else None,
                         'file_type': image.file_type,
                         'created_at': image.created_at,
@@ -570,6 +860,7 @@ class ProductViewSet(viewsets.ModelViewSet):
                     simplified_images.append({
                         'id': image.id,
                         'product': image.product.id,
+                        'variant': image.variant.id if image.variant else None,
                         'file': request.build_absolute_uri(image.file.url) if image.file else None,
                         'file_type': image.file_type,
                         'created_at': image.created_at,
@@ -590,6 +881,12 @@ class ProductViewSet(viewsets.ModelViewSet):
                     'discount_price': {'type': 'number', 'nullable': True},
                     'stock': {'type': 'integer'},
                     'category': {'type': 'integer'},
+                    'weight': {'type': 'number', 'nullable': True},
+                    'length': {'type': 'number', 'nullable': True},
+                    'width': {'type': 'number', 'nullable': True},
+                    'height': {'type': 'number', 'nullable': True},
+                    'is_active': {'type': 'boolean', 'default': True},
+                    'status': {'type': 'string', 'enum': ['draft', 'active', 'inactive'], 'default': 'active'},
                     'files': {
                         'type': 'array',
                         'items': {'type': 'string', 'format': 'binary'}
@@ -660,6 +957,12 @@ class ProductViewSet(viewsets.ModelViewSet):
                 'seller_username': product.seller.username if product.seller else None,
                 'created_at': product.created_at,
                 'updated_at': product.updated_at,
+                'weight': product.weight,
+                'length': product.length,
+                'width': product.width,
+                'height': product.height,
+                'is_active': product.is_active,
+                'status': product.status
             }
             return Response(simplified_product, status=status.HTTP_201_CREATED)
     
@@ -674,11 +977,18 @@ class ProductViewSet(viewsets.ModelViewSet):
                     'discount_price': {'type': 'number', 'nullable': True},
                     'stock': {'type': 'integer'},
                     'category': {'type': 'integer'},
+                    'weight': {'type': 'number', 'nullable': True},
+                    'length': {'type': 'number', 'nullable': True},
+                    'width': {'type': 'number', 'nullable': True},
+                    'height': {'type': 'number', 'nullable': True},
+                    'is_active': {'type': 'boolean'},
+                    'status': {'type': 'string', 'enum': ['draft', 'active', 'inactive']},
                     'files': {
                         'type': 'array',
                         'items': {'type': 'string', 'format': 'binary'}
                     },
-                }
+                },
+                'required': ['name', 'description', 'price', 'stock', 'category']
             }
         },
         parameters=[
@@ -744,6 +1054,12 @@ class ProductViewSet(viewsets.ModelViewSet):
                 'seller_username': product.seller.username if product.seller else None,
                 'created_at': product.created_at,
                 'updated_at': product.updated_at,
+                'weight': product.weight,
+                'length': product.length,
+                'width': product.width,
+                'height': product.height,
+                'is_active': product.is_active,
+                'status': product.status
             }
             return Response(simplified_product)
     
@@ -758,6 +1074,12 @@ class ProductViewSet(viewsets.ModelViewSet):
                     'discount_price': {'type': 'number', 'nullable': True},
                     'stock': {'type': 'integer'},
                     'category': {'type': 'integer'},
+                    'weight': {'type': 'number', 'nullable': True},
+                    'length': {'type': 'number', 'nullable': True},
+                    'width': {'type': 'number', 'nullable': True},
+                    'height': {'type': 'number', 'nullable': True},
+                    'is_active': {'type': 'boolean'},
+                    'status': {'type': 'string', 'enum': ['draft', 'active', 'inactive']},
                     'files': {
                         'type': 'array',
                         'items': {'type': 'string', 'format': 'binary'}
@@ -804,11 +1126,13 @@ class ProductViewSet(viewsets.ModelViewSet):
                     ('products_productview', 'product_id'),
                     ('products_review', 'product_id'),
                     ('products_productimage', 'product_id'),
+                    ('products_productvariant', 'product_id'),
                     ('carts_cartitem', 'product_id'),
                     ('orders_orderitem', 'product_id'),
+                    ('products_wishlistitem', 'product_id'),
                     # Add any other tables that might reference products
                 ]
-                
+
                 # Check each table and delete related records if the table exists
                 for table_name, column_name in tables_to_check:
                     try:
@@ -946,3 +1270,147 @@ class ProductViewSet(viewsets.ModelViewSet):
             created_files.append(ProductImageSerializer(product_file, context={'request': request}).data)
         
         return Response(created_files, status=status.HTTP_201_CREATED)
+    
+    @extend_schema(
+        description="Add a variant to a product",
+        request=ProductVariantSerializer,
+    )
+    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated, IsProductSeller])
+    def add_variant(self, request, pk=None):
+        """Add a variant to a product"""
+        product = self.get_object()
+        
+        # Check if user is the seller
+        if product.seller != request.user and not request.user.is_staff and request.user.role != 'admin':
+            return Response(
+                {'error': 'Only the seller or admin can add variants to this product'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Create serializer with product already set
+        data = request.data.copy()
+        data['product'] = product.id
+        
+        serializer = ProductVariantSerializer(data=data)
+        if serializer.is_valid():
+            variant = serializer.save()
+            
+            # Add options if provided
+            option_ids = request.data.get('options', [])
+            if option_ids:
+                for option_id in option_ids:
+                    try:
+                        option = ProductVariantOption.objects.get(id=option_id)
+                        variant.options.add(option)
+                    except ProductVariantOption.DoesNotExist:
+                        pass
+            
+            return Response(ProductVariantSerializer(variant).data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    @extend_schema(
+        description="Generate multiple variants from combinations of options",
+        request={
+            'application/json': {
+                'type': 'object',
+                'properties': {
+                    'option_groups': {
+                        'type': 'array',
+                        'items': {
+                            'type': 'array',
+                            'items': {'type': 'integer'}
+                        },
+                        'description': 'Array of option ID arrays, each representing a variant type'
+                    },
+                    'base_sku': {'type': 'string', 'description': 'Base SKU to use for generated variants'},
+                    'price_adjustments': {
+                        'type': 'object',
+                        'additionalProperties': {'type': 'number'},
+                        'description': 'Map of option IDs to price adjustments'
+                    }
+                },
+                'required': ['option_groups', 'base_sku']
+            }
+        }
+    )
+    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated, IsProductSeller])
+    def bulk_create_variants(self, request, pk=None):
+        """Generate multiple variants from combinations of options"""
+        product = self.get_object()
+        
+        # Check if user is the seller
+        if product.seller != request.user and not request.user.is_staff and request.user.role != 'admin':
+            return Response(
+                {'error': 'Only the seller or admin can add variants to this product'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        option_groups = request.data.get('option_groups', [])
+        base_sku = request.data.get('base_sku', '')
+        price_adjustments = request.data.get('price_adjustments', {})
+        
+        if not option_groups or not base_sku:
+            return Response(
+                {'error': 'option_groups and base_sku are required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Convert string keys to integers for price_adjustments
+        price_adjustments = {int(k): v for k, v in price_adjustments.items()}
+        
+        # Generate all combinations of options
+        from itertools import product as itertools_product
+        combinations = list(itertools_product(*option_groups))
+        
+        created_variants = []
+        
+        for i, combo in enumerate(combinations):
+            # Generate SKU
+            sku = f"{base_sku}-{i+1}"
+            
+            # Calculate price adjustment
+            price_adjustment = sum(price_adjustments.get(option_id, 0) for option_id in combo)
+            
+            # Create variant
+            variant = ProductVariant.objects.create(
+                product=product,
+                sku=sku,
+                price_adjustment=price_adjustment,
+                stock=0,  # Default stock to 0
+                is_active=True
+            )
+            
+            # Add options
+            for option_id in combo:
+                try:
+                    option = ProductVariantOption.objects.get(id=option_id)
+                    variant.options.add(option)
+                except ProductVariantOption.DoesNotExist:
+                    pass
+            
+            created_variants.append(ProductVariantSerializer(variant).data)
+        
+        return Response(created_variants, status=status.HTTP_201_CREATED)
+        
+    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
+    def toggle_wishlist(self, request, pk=None):
+        """
+        Toggle a product in the user's wishlist
+        """
+        product = self.get_object()
+        wishlist, created = Wishlist.objects.get_or_create(user=request.user)
+        
+        # Check if the product is already in the wishlist
+        wishlist_item = WishlistItem.objects.filter(
+            wishlist=wishlist,
+            product=product
+        ).first()
+        
+        if wishlist_item:
+            # Remove from wishlist
+            wishlist_item.delete()
+            return Response({'status': 'removed', 'message': 'Product removed from wishlist'})
+        else:
+            # Add to wishlist
+            WishlistItem.objects.create(wishlist=wishlist, product=product)
+            return Response({'status': 'added', 'message': 'Product added to wishlist'})
