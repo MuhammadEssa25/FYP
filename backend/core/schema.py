@@ -1,6 +1,5 @@
 from drf_spectacular.extensions import OpenApiAuthenticationExtension
-from drf_spectacular.settings import spectacular_settings
-from django.apps import apps
+from drf_spectacular.openapi import AutoSchema
 
 # This class will be used by drf-spectacular to generate the security scheme
 class JWTAuthenticationScheme(OpenApiAuthenticationExtension):
@@ -14,21 +13,56 @@ class JWTAuthenticationScheme(OpenApiAuthenticationExtension):
             'bearerFormat': 'JWT',
         }
 
+# Custom operation sorter for consistent ordering across operating systems
+def custom_operation_sorter(endpoints):
+    """Sort operations by tag and operation_id"""
+    return sorted(
+        endpoints,
+        key=lambda ep: (
+            ep[0].split('/')[1] if len(ep[0].split('/')) > 1 else ep[0],  # Sort by app name in URL
+            ep[0],  # Then by full path
+        )
+    )
+
+# Custom AutoSchema class that uses app names for tagging
+class CustomAutoSchema(AutoSchema):
+    def get_tags(self):
+        """Get operation tags based on app name instead of path"""
+        # First check if tags are explicitly defined
+        if hasattr(self.view, 'tags'):
+            return self.view.tags
+            
+        # Get the app name from the view's module
+        module_name = self.view.__module__
+        app_name = module_name.split('.')[0].capitalize()
+        return [app_name]
+
+# Define ENUM_NAME_OVERRIDES for settings.py to import
+# This will be populated later when apps are loaded
+ENUM_NAME_OVERRIDES = {}
+
+# Move the model-dependent code to a function that will be called after apps are loaded
 def get_model_choices_path(app_label, model_name, field_name):
     """
     Helper function to get the path to a model's choices for a field.
     Returns None if the model or field doesn't exist.
     """
     try:
+        from django.apps import apps
         model = apps.get_model(app_label, model_name)
         if hasattr(model, field_name.upper()):
             return f"{app_label}.models.{model_name}.{field_name.upper()}"
-    except LookupError:
+    except (LookupError, ImportError):
         pass
     return None
 
-# This function will be called after apps are loaded
 def setup_spectacular_settings():
+    """
+    This function should be called after apps are loaded, e.g., in AppConfig.ready()
+    """
+    from drf_spectacular.settings import spectacular_settings
+    from django.apps import apps
+    
     # Initialize an empty dictionary for enum name overrides
     enum_overrides = {}
     
@@ -94,6 +128,18 @@ def setup_spectacular_settings():
     
     # Additional settings to help with enum naming
     spectacular_settings.ENUM_ADD_EXPLICIT_BLANK_NULL_CHOICE = False
+    
+    # Add new settings for consistent API grouping
+    spectacular_settings.OPERATION_SORTER = custom_operation_sorter
+    
+    # Add tag plugins for better organization
+    spectacular_settings.TAG_PLUGINS = [
+        'drf_spectacular.contrib.django_filters.DjangoFilterExtension',
+    ]
+    
+    # Update the global ENUM_NAME_OVERRIDES
+    global ENUM_NAME_OVERRIDES
+    ENUM_NAME_OVERRIDES.update(enum_overrides)
     
     # Print the enum overrides for debugging
     print("Enum name overrides:")

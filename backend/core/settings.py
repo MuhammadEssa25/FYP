@@ -108,7 +108,7 @@ REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'rest_framework_simplejwt.authentication.JWTAuthentication',
     ),
-    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
+    'DEFAULT_SCHEMA_CLASS': 'core.schema.CustomAutoSchema',  # Updated to use CustomAutoSchema
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticatedOrReadOnly',
     ],
@@ -127,8 +127,8 @@ SIMPLE_JWT = {
     'REFRESH_TOKEN_LIFETIME': timedelta(days=1),
 }
 
-# Import enum overrides without importing models
-from core.schema import ENUM_NAME_OVERRIDES
+# Initialize empty ENUM_NAME_OVERRIDES - will be populated by CoreConfig.ready()
+ENUM_NAME_OVERRIDES = {}
 
 SPECTACULAR_SETTINGS = {
     'TITLE': 'E-Commerce API',
@@ -153,6 +153,11 @@ SPECTACULAR_SETTINGS = {
     },
     'SECURITY': [{'Bearer': []}],
     'ENUM_NAME_OVERRIDES': ENUM_NAME_OVERRIDES,
+    # New settings for consistent API grouping
+    'OPERATION_SORTER': 'core.schema.custom_operation_sorter',
+    'TAG_PLUGINS': [
+        'drf_spectacular.contrib.django_filters.DjangoFilterExtension',
+    ],
 }
 
 SITE_ID = 1
